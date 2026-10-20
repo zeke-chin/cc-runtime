@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y \
     # 备用的文件下载工具
     git \
     # 版本控制
+    jq \
+    # JSON 处理工具
+    gh \
+    # GitHub CLI
     vim \
     # 终端文本编辑器
     net-tools \
@@ -89,7 +93,7 @@ COPY shell/ /opt/cc-runtime/
 RUN chmod +x /usr/local/bin/entrypoint.sh /opt/cc-runtime/setup-shell.sh
 
 # 添加系统级别名
-RUN uecho 'alias yolo="claude --dangerously-skip-permissions"' >> /etc/bash.bashrc
+RUN echo 'alias yolo="claude --dangerously-skip-permissions"' >> /etc/bash.bashrc
 
 USER dev
 WORKDIR /home/dev/workspace
