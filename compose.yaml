@@ -1,0 +1,87 @@
+services:
+  dev:
+    image: cc-runtime-dev:latest
+    build: .
+    restart: unless-stopped
+    cap_drop: [NET_RAW]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "1"
+    depends_on:
+      proxy:
+        condition: service_healthy
+    environment:
+      PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
+      TZ: America/New_York
+    volumes:
+      - type: bind
+        source: ./dev-home
+        target: /home/dev
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /Users/zeke/workspace
+        target: /home/dev/workspace
+        bind:
+          create_host_path: false
+      - ./proxy/resolv.conf:/etc/resolv.conf:ro
+    networks:
+      private:
+        ipv4_address: 172.30.0.10
+
+  proxy:
+    image: metacubex/mihomo:latest
+    environment:
+      PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.disable_ipv6: "1"
+    entrypoint: [/bin/sh, /scripts/proxy-entrypoint.sh]
+    volumes:
+      - ./scripts/proxy-entrypoint.sh:/scripts/proxy-entrypoint.sh:ro
+      - type: bind
+        source: ./proxy/config.yaml
+        target: /root/.config/mihomo/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      private:
+        ipv4_address: 172.30.0.2
+      outbound: {}
+    ports:
+      - "127.0.0.1:19090:9090"
+      - "127.0.0.1:2222:10022"
+      - "127.0.0.1:5901:15901"
+      - "127.0.0.1:6080:16080"
+    healthcheck:
+      test: [CMD-SHELL, "nc -z 127.0.0.1 9090 && nc -z 127.0.0.1 53"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Only this short-lived helper shares dev's network namespace.
+  # It never receives the proxy config or credentials.
+  dev-network-init:
+    image: metacubex/mihomo:latest
+    network_mode: service:dev
+    restart: "no"
+    cap_add: [NET_ADMIN]
+    depends_on:
+      dev:
+        condition: service_started
+    entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
+    volumes:
+      - ./scripts/dev-network-init.sh:/scripts/dev-network-init.sh:ro
+
+networks:
+  private:
+    internal: true
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  outbound:
+    enable_ipv6: false
+

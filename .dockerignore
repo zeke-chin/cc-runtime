@@ -1,0 +1,11 @@
+.git
+.env
+proxy/
+scripts/
+README.md
+compose.yaml
+.runtime/
+dependency-rules.json
+tests/
+__pycache__/
+dev-home/

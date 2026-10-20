@@ -1,0 +1,66 @@
+# Copy to config.yaml and replace both proxies before starting.
+# This file is native Mihomo YAML: Compose does NOT expand variables here.
+# Controller address and secret are provided by proxy-entrypoint.sh from .env.
+# Connect your own UI to http://127.0.0.1:19090; no UI is deployed here.
+mode: rule
+log-level: info
+ipv6: false
+allow-lan: true
+bind-address: '*'
+redir-port: 7893
+
+proxies:
+  # Replace this entire entry with ONE complete node from your Clash subscription.
+  # Keep the name "airport". Preserve its TLS/SNI/transport options.
+  - name: airport
+    type: ss
+    server: airport.example.com
+    port: 443
+    cipher: chacha20-ietf-poly1305
+    password: REPLACE_AIRPORT_PASSWORD
+
+  - name: residential
+    type: http
+    server: residential.example.com
+    port: 12345
+    username: REPLACE_RESIDENTIAL_USER
+    password: REPLACE_RESIDENTIAL_PASSWORD
+    # For an HTTPS proxy, also set tls: true (only if the provider supports it).
+    dialer-proxy: airport
+
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  ipv6: false
+  enhanced-mode: redir-host
+  prefer-h3: false
+  use-hosts: false
+  use-system-hosts: false
+  default-nameserver:
+    - https://1.1.1.1/dns-query
+  # Bootstrap only: use the gateway system resolver for proxy server names.
+  # Workload DNS below still uses DoH through the residential chain.
+  proxy-server-nameserver:
+    - system
+  # Workload DNS always uses the full chain; no direct fallback.
+  nameserver:
+    - 'https://1.1.1.1/dns-query#residential'
+
+# These fixed inbound tunnels are the ONLY intended DIRECT traffic to dev.
+# Host ports are bound to 127.0.0.1 by Compose.
+tunnels:
+  - network: [tcp]
+    address: 0.0.0.0:10022
+    target: 172.30.0.10:22
+    proxy: DIRECT
+  - network: [tcp]
+    address: 0.0.0.0:15901
+    target: 172.30.0.10:5901
+    proxy: DIRECT
+  - network: [tcp]
+    address: 0.0.0.0:16080
+    target: 172.30.0.10:6080
+    proxy: DIRECT
+
+rules:
+  - MATCH,residential
