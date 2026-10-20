@@ -108,7 +108,7 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY shell/ /opt/cc-runtime/
 COPY --chmod=0755 shell/setup-shell.sh /opt/cc-runtime/setup-shell.sh
 
-# 安装 zim，并写入 .zshrc / .zimrc
+# 安装 zim，并写入 .zshenv / .zshrc / .zimrc
 RUN /opt/cc-runtime/setup-shell.sh
 
 # bash 仍保留 Claude Code 的 PATH 和别名

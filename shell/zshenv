@@ -1,0 +1,2 @@
+# 禁用 Ubuntu 全局 compinit，由 Zim 的 completion 模块统一初始化补全。
+skip_global_compinit=1

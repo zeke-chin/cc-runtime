@@ -81,7 +81,7 @@ fi
 
 alias yolo="claude --dangerously-skip-permissions"
 alias zshc="vim ~/.zshrc"
-alias zshcc="source ~/.zshrc"
+alias zshcc="exec zsh"
 alias nload="bash -c 'nload -u H'"
 alias j="zi"
 alias gcm="git commit -m "

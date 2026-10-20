@@ -1,11 +1,12 @@
 #!/bin/bash
-# 为当前用户安装 zim，并写入 .zimrc / .zshrc。
+# 为当前用户安装 zim，并写入 .zshenv / .zimrc / .zshrc。
 # 构建镜像时以 dev 用户运行，模块会预先装进 ~/.zim。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ZIM_HOME="${ZDOTDIR:-$HOME}/.zim"
 
+cp "$SCRIPT_DIR/zshenv" "$HOME/.zshenv"
 cp "$SCRIPT_DIR/zimrc" "$HOME/.zimrc"
 cp "$SCRIPT_DIR/zshrc" "$HOME/.zshrc"
 
