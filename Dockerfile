@@ -73,8 +73,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_23.x | bash - \
     && apt-get update && apt-get install -y nodejs \
     && npm install -g pnpm playwright
 
-# 安装 Playwright 的系统依赖和 Chromium
-RUN playwright install --with-deps chromium
+# 系统依赖需要 root；浏览器在切换到 dev 后单独下载。
+RUN playwright install-deps chromium
 
 # 安装 Go 官方二进制，按当前架构下载最新稳定版
 RUN arch="$(dpkg --print-architecture)" && \
@@ -90,6 +90,10 @@ RUN echo 'alias yolo="claude --dangerously-skip-permissions"' >> /etc/bash.bashr
 USER dev
 WORKDIR /home/dev/workspace
 ENV PATH="/usr/local/go/bin:/home/dev/go/bin:/home/dev/.cargo/bin:/home/dev/.local/bin:${PATH}"
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/dev/.local/share/ms-playwright
+
+# .cache 会被独立卷覆盖且不参与家目录初始化，浏览器放到会持久化的 .local。
+RUN playwright install chromium
 
 # 用户级工具必须在 USER dev 之后安装，否则会落到 /root 下。
 RUN curl -fsSL https://claude.ai/install.sh | bash \

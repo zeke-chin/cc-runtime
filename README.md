@@ -127,6 +127,8 @@ python3 scripts/dev.py compose up -d --no-deps --force-recreate proxy
 
 `dev-home/` 已加入 Git 与 Docker 构建忽略列表。它存放的是 Linux 开发环境数据，不是 macOS 的用户家目录；不要把其中的 Linux 工具直接用于 Mac，切换容器 CPU 架构时也需要重新安装相关二进制工具。备份家目录可复制 `dev-home/`，但工作区与依赖缓存属于另外两个挂载，需要分别备份。
 
+Playwright 的系统依赖由 root 安装，Chromium 由 dev 下载到 `/home/dev/.local/share/ms-playwright`，通过 `PLAYWRIGHT_BROWSERS_PATH` 统一指定安装和运行时路径，避免浏览器落在 `/root` 或被缓存卷覆盖。首次初始化家目录时会一起复制浏览器；已有初始化标记的家目录不会自动补装，可在更新镜像并重建容器后，以 dev 执行 `playwright install chromium`。
+
 ### 单卷隔离依赖与构建产物
 
 源码继续共享 `/Users/zeke/workspace`。启动脚本扫描项目，为依赖和构建产物生成子目录挂载，全部存放在 **一个外部 Docker 卷** 中：默认名为 `cc-runtime_dependencies`，前缀跟随 Compose 项目名。
