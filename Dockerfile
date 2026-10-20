@@ -84,14 +84,6 @@ RUN arch="$(dpkg --print-architecture)" && \
     tar -C /usr/local -xzf /tmp/go.tgz && \
     rm /tmp/go.tgz
 
-
-    
-    
-# 复制入口脚本和 shell 配置
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY shell/ /opt/cc-runtime/
-RUN chmod +x /usr/local/bin/entrypoint.sh /opt/cc-runtime/setup-shell.sh
-
 # 添加系统级别名
 RUN echo 'alias yolo="claude --dangerously-skip-permissions"' >> /etc/bash.bashrc
 
@@ -106,6 +98,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable \
     && rustc --version && cargo --version
+
+# 本地脚本放在工具安装之后，修改脚本时复用 Claude / Rust 等工具层缓存。
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY shell/ /opt/cc-runtime/
+COPY --chmod=0755 shell/setup-shell.sh /opt/cc-runtime/setup-shell.sh
 
 # 安装 zim，并写入 .zshrc / .zimrc
 RUN /opt/cc-runtime/setup-shell.sh

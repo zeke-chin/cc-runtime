@@ -161,6 +161,8 @@ Mac workspace/my-project/target    ← 独立 → 总卷中的该项目 target �
 
 开发镜像使用 `ghcr.io/zeke-chin/cc-runtime:latest`，提供 Linux AMD64 和 ARM64，Docker 自动选择对应架构。`up` 默认拉取镜像，`up --no-pull` 使用本地缓存（兼容旧参数 `--no-build`）。如需本地构建，可执行 `docker build -t ghcr.io/zeke-chin/cc-runtime:latest .`，再运行 `up --no-pull`。若提示另一条 `dev.py` 命令仍在运行，等待其结束再重试，不要并行执行两次启动。
 
+GitHub Actions 使用 `ubuntu-24.04` 和 `ubuntu-24.04-arm` 分别原生构建 AMD64、ARM64，不使用 QEMU。两个构建按架构隔离 Actions 缓存，分别推送镜像 digest；全部成功后再合并多架构 manifest，发布 `main` / `latest`（默认分支）及 `sha-*` 标签，并检查发布结果包含两个架构。修改 Dockerfile、`.dockerignore`、入口脚本、`shell/` 或发布 workflow 会触发构建，也可手动运行。首次使用新缓存 scope 时会完整构建；后续可复用未变更的工具安装层。
+
 #### 日常命令
 
 ```bash

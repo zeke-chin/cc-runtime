@@ -4,6 +4,10 @@ on:
   push:
     paths:
       - Dockerfile
+      - .dockerignore
+      - entrypoint.sh
+      - shell/**
+      - .github/workflows/publish-image.yml
   workflow_dispatch:
 
 permissions:
@@ -15,11 +19,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -36,14 +49,91 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha
-      - name: Build and publish
+      # Each native runner pushes by digest; only the merge job updates tags.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-platform image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=sha
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: image-digests-*
+          merge-multiple: true
+      - name: Merge and publish manifests
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository }}
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          tags=()
+          while IFS= read -r tag; do
+            tags+=(--tag "$tag")
+          done < <(jq -r '.tags[]' <<< "$METADATA_JSON")
+
+          sources=()
+          for digest in *; do
+            if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Invalid image digest: $digest" >&2
+              exit 1
+            fi
+            sources+=("$IMAGE_NAME@sha256:$digest")
+          done
+          if [[ ${#sources[@]} -ne 2 ]]; then
+            echo "Expected digests for both amd64 and arm64" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+      - name: Verify published platforms
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          tag=$(jq -r '.tags[0]' <<< "$METADATA_JSON")
+          docker buildx imagetools inspect "$tag" --raw | jq -e '
+            [.manifests[].platform | select(.os == "linux") | .architecture]
+            | sort == ["amd64", "arm64"]
+          '
