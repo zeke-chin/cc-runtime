@@ -1,7 +1,6 @@
 services:
   dev:
-    image: cc-runtime-dev:latest
-    build: .
+    image: ghcr.io/zeke-chin/cc-runtime:latest
     restart: unless-stopped
     cap_drop: [NET_RAW]
     sysctls:

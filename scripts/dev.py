@@ -211,9 +211,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("scan", help="Generate and validate mount plan; do not start containers")
-    sub.add_parser("prepare", help="Scan and initialize volume using an already-built dev image")
-    up = sub.add_parser("up", help="Build, scan, initialize, and recreate services")
-    up.add_argument("--no-build", action="store_true")
+    sub.add_parser("prepare", help="Scan and initialize volume using a local dev image")
+    up = sub.add_parser("up", help="Pull image, scan, initialize, and recreate services")
+    up.add_argument("--no-pull", "--no-build", dest="no_pull", action="store_true",
+                    help="Use the local image without pulling (--no-build is a legacy alias)")
     passthrough = sub.add_parser("compose", help="Run Compose with the generated mounts")
     passthrough.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -233,14 +234,14 @@ def main():
         model, plan = generate()
         if args.command == "scan":
             return
-        if args.command == "up" and not args.no_build:
-            compose("build", "dev")
+        if args.command == "up" and not args.no_pull:
+            compose("pull", "dev")
         image = model["services"]["dev"].get("image", model["name"] + "-dev")
         try:
             run(["docker", "image", "inspect", "--format", "{{.Id}}", image], capture=True)
         except subprocess.CalledProcessError:
             raise ValueError(f"Local image {image!r} is missing. Run 'python3 scripts/dev.py up' "
-                             f"to build it, or tag your existing image as {image}.") from None
+                             f"to pull it, or tag your existing image as {image}.") from None
         ids = run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh",
                    image, "-c", "id -u dev; id -g dev"], capture=True).split()
         if len(ids) != 2 or not all(i.isdecimal() for i in ids):

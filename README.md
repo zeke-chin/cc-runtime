@@ -75,7 +75,7 @@ dev-home/                      dev 家目录的宿主机存储，不提交 Git�
    docker compose run --rm --no-deps --entrypoint /mihomo proxy \
      -t -f /root/.config/mihomo/config.yaml
    python3 scripts/dev.py up
-   # 若已用 docker build -t cc-runtime-dev . 构建，可改用 up --no-build
+   # 若本地已有镜像且不想更新，可改用 up --no-pull
    python3 scripts/dev.py compose ps -a
    python3 scripts/dev.py compose logs proxy dev-network-init dev
    ```
@@ -159,7 +159,7 @@ Mac workspace/my-project/target    ← 独立 → 总卷中的该项目 target �
 
 `__pycache__` 不生成独立挂载。通过 `PYTHONPYCACHEPREFIX=/home/dev/.cache/python/pycache` 将 Python 字节码缓存统一写到总卷的缓存子目录，现有宿主机 `__pycache__` 不删除、仍可见。常规遵循该设置的 Python 解释器使用独立缓存；使用 `-E`/`-I` 忽略环境变量的解释器或自行管理缓存的工具不在此保证内。`XDG_CACHE_HOME` 同样指向总卷内的 `/home/dev/.cache`。
 
-开发镜像固定命名为 `cc-runtime-dev:latest`。手动构建请使用 `docker build -t cc-runtime-dev .`；只有 `docker build .` 的无标签镜像不能被 `up --no-build` 自动识别。若提示另一条 `dev.py` 命令仍在运行，等待其结束再重试，不要并行执行两次启动。
+开发镜像使用 `ghcr.io/zeke-chin/cc-runtime:latest`，提供 Linux AMD64 和 ARM64，Docker 自动选择对应架构。`up` 默认拉取镜像，`up --no-pull` 使用本地缓存（兼容旧参数 `--no-build`）。如需本地构建，可执行 `docker build -t ghcr.io/zeke-chin/cc-runtime:latest .`，再运行 `up --no-pull`。若提示另一条 `dev.py` 命令仍在运行，等待其结束再重试，不要并行执行两次启动。
 
 #### 日常命令
 
@@ -167,13 +167,13 @@ Mac workspace/my-project/target    ← 独立 → 总卷中的该项目 target �
 # 只扫描并生成挂载清单，不创建卷、不启动容器、不修改项目文件
 python3 scripts/dev.py scan
 
-# 构建开发镜像、重新扫描、初始化总卷、重建并启动相关服务
+# 拉取开发镜像、重新扫描、初始化总卷、重建并启动相关服务
 python3 scripts/dev.py up
 
-# 已有开发镜像时，跳过构建；新增项目后可用这个命令更新挂载
-python3 scripts/dev.py up --no-build
+# 已有开发镜像时，跳过拉取；新增项目后可用这个命令更新挂载
+python3 scripts/dev.py up --no-pull
 
-# 仅扫描和初始化卷，要求开发镜像已经构建
+# 仅扫描和初始化卷，要求本地已有开发镜像
 python3 scripts/dev.py prepare
 
 # 使用同一份生成配置查看日志、执行命令和停止服务
@@ -184,7 +184,7 @@ python3 scripts/dev.py compose down
 
 `.runtime/compose.dependencies.json` 是自动生成的 Compose 附加文件。**启用隔离后，通过上述脚本启动，不要直接用裸 `docker compose up`**，否则不会加载这些挂载。扫描后无需手工编辑生成文件。
 
-新增项目、worktree，或者创建了此前无法从项目标记预测的缓存目录，需要重新执行 `up --no-build`。更新挂载会重建容器并中断开发会话；普通源码修改实时共享，不需要重新扫描或重启。运行中不自动热插拔挂载，新增目录在重新扫描前仍属于宿主机共享路径。
+新增项目、worktree，或者创建了此前无法从项目标记预测的缓存目录，需要重新执行 `up --no-pull`。更新挂载会重建容器并中断开发会话；普通源码修改实时共享，不需要重新扫描或重启。运行中不自动热插拔挂载，新增目录在重新扫描前仍属于宿主机共享路径。
 
 #### 自定义规则与清理
 
