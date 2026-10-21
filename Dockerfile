@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     # 让 dev 用户提权执行管理命令
     wget \
     # 备用的文件下载工具
+    unzip \
+    # 解压 Bun 安装包
     git \
     # 版本控制
     jq \
@@ -60,6 +62,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | \
 # 安装 Herdr，二进制放到 /usr/local/bin
 RUN curl -fsSL https://herdr.dev/install.sh | env HERDR_INSTALL_DIR=/usr/local/bin sh
 
+# 安装 Bun 到系统路径，已有家目录挂载也可直接使用 bun / bunx。
+RUN curl -fsSL https://bun.com/install | env BUN_INSTALL=/usr/local bash \
+    && bun --version && bunx --version
+
 # 创建 dev 用户，默认 Shell 为 zsh
 RUN useradd -m -s /bin/zsh dev && \
     usermod -aG sudo dev && \
@@ -85,7 +91,7 @@ RUN arch="$(dpkg --print-architecture)" && \
     rm /tmp/go.tgz
 
 # 添加系统级别名
-RUN echo 'alias yolo="claude --dangerously-skip-permissions"' >> /etc/bash.bashrc
+RUN echo 'alias claude="claude --dangerously-skip-permissions"' >> /etc/bash.bashrc
 
 USER dev
 WORKDIR /home/dev/workspace
@@ -113,7 +119,7 @@ RUN /opt/cc-runtime/setup-shell.sh
 
 # bash 仍保留 Claude Code 的 PATH 和别名
 RUN echo 'export PATH="/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"' >> /home/dev/.bashrc && \
-    echo 'alias yolo="claude --dangerously-skip-permissions"' >> /home/dev/.bashrc
+    echo 'alias claude="claude --dangerously-skip-permissions"' >> /home/dev/.bashrc
 
 EXPOSE 22 5901 6080
 

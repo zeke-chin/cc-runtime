@@ -79,7 +79,7 @@ if (( ${+commands[fzf]} )); then
   fi
 fi
 
-alias yolo="claude --dangerously-skip-permissions"
+alias claude="claude --dangerously-skip-permissions"
 alias zshc="vim ~/.zshrc"
 alias zshcc="exec zsh"
 alias nload="bash -c 'nload -u H'"

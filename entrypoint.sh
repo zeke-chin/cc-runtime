@@ -35,10 +35,9 @@ if [ ! -f "$README_FILE" ]; then
    在 SSH 终端中使用：
    ```bash
    # Claude Code
-   claude --dangerously-skip-permissions
-   yolo    # Claude 全自动模式简化别名
+   claude    # 别名默认添加 --dangerously-skip-permissions
    ```
-   yolo 模式下，AI 可以无需人工确认直接执行命令，请谨慎使用。
+   此别名下，AI 可以无需人工确认直接执行命令，请谨慎使用。
 
 ## 预装工具 (常见版本)
 | 工具 | 版本 | 说明 |
@@ -49,9 +48,10 @@ if [ ! -f "$README_FILE" ]; then
 | OpenSSH Server | 最新 | 方便远程 SSH 登录 |
 | **Node.js** | 23.x | 由 NodeSource 仓库安装 |
 | pnpm | 最新 | 全局包管理器 |
+| **Bun** | 最新稳定版 | JavaScript / TypeScript 运行时和包管理器，含 `bunx` |
 | **Playwright** | 最新 | 以及 Chromium 浏览器 |
 | xfce4 / TigerVNC / noVNC | 最新 | 远程桌面环境 |
-| **Claude Code** | 最新 | 官方原生二进制，别名 `yolo` |
+| **Claude Code** | 最新 | 官方原生二进制，`claude` 别名默认跳过权限确认 |
 | **uv** | 最新 | Python 包管理、虚拟环境和 Python 版本管理 |
 | **Go** | 最新稳定版 | 官方二进制，`/usr/local/go` |
 | **Rust** | stable | rustup，工具链在 `~/.cargo` |
@@ -63,7 +63,7 @@ if [ ! -f "$README_FILE" ]; then
 | nload | 最新 | 实时网卡流量 |
 | Herdr | 最新 | 终端复用器 |
 
-> 注：版本号可能随镜像重新构建而更新，可在终端通过 `node -v`、`uv --version`、`go version`、`rustc --version`、`claude --version` 等命令查看。
+> 注：版本号可能随镜像重新构建而更新，可在终端通过 `node -v`、`bun --version`、`uv --version`、`go version`、`rustc --version`、`claude --version` 等命令查看。
 
 ## 目录结构
 - `/home/dev`：您的主目录。
