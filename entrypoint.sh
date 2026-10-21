@@ -62,6 +62,7 @@ if [ ! -f "$README_FILE" ]; then
 | zoxide | 最新 | 目录跳转，命令 `z`，别名 `j` |
 | nload | 最新 | 实时网卡流量 |
 | Herdr | 最新 | 终端复用器 |
+| tmux | 系统仓库版本 | 终端复用、分屏和持久会话 |
 
 > 注：版本号可能随镜像重新构建而更新，可在终端通过 `node -v`、`bun --version`、`uv --version`、`go version`、`rustc --version`、`claude --version` 等命令查看。
 

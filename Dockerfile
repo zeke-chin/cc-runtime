@@ -47,6 +47,8 @@ RUN apt-get update && apt-get install -y \
     # rg，按内容快速搜索代码
     zsh \
     # 默认 Shell
+    tmux \
+    # 终端复用、分屏和持久会话
     nload \
     # 实时查看网卡流量
     fzf \
