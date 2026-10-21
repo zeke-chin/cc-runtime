@@ -51,6 +51,10 @@ RUN apt-get update && apt-get install -y \
     # 终端复用、分屏和持久会话
     nload \
     # 实时查看网卡流量
+    btop \
+    # 查看 CPU、内存、磁盘和网络资源使用情况
+    htop \
+    # 交互式查看和管理进程
     fzf \
     # 模糊查找，Ctrl-R 搜历史、Ctrl-T 搜文件
     zoxide \
