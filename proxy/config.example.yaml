@@ -39,10 +39,16 @@ dns:
   default-nameserver:
     - https://1.1.1.1/dns-query
   # Bootstrap only: use the gateway system resolver for proxy server names.
-  # Workload DNS below still uses DoH through the residential chain.
+  # Other workload DNS below uses DoH through the residential chain.
   proxy-server-nameserver:
     - system
-  # Workload DNS always uses the full chain; no direct fallback.
+  # Direct domains use the Docker system resolver backed by the host DNS.
+  nameserver-policy:
+    '+.weimob.com': system
+    '+.hsmob.com': system
+    '+.weimobqa.com': system
+    '+.tencent.com': system
+  # Other workload DNS uses the full chain; no direct fallback.
   nameserver:
     - 'https://1.1.1.1/dns-query#residential'
 
@@ -63,4 +69,9 @@ tunnels:
     proxy: DIRECT
 
 rules:
+  # Direct domains (including the apex) use the host network via Docker egress.
+  - DOMAIN-SUFFIX,weimob.com,DIRECT
+  - DOMAIN-SUFFIX,hsmob.com,DIRECT
+  - DOMAIN-SUFFIX,weimobqa.com,DIRECT
+  - DOMAIN-SUFFIX,tencent.com,DIRECT
   - MATCH,residential

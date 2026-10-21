@@ -209,16 +209,17 @@ python3 scripts/dev.py compose down
 
 ## 出站与 DNS 策略
 
-- 所有外网 TCP 连接：`dev → proxy → airport → residential → 目标`。
+- `weimob.com`、`hsmob.com`、`weimobqa.com`、`tencent.com` 及其所有子域名：通过 `DOMAIN-SUFFIX` 优先匹配 `DIRECT`，经 Docker 出口使用宿主机网络访问目标；DNS 通过 `nameserver-policy` 使用网关系统解析器（Docker DNS 转发到宿主机侧）。宿主机需已连上公司网络或 VPN，Docker 出口也需能访问相应内网。新增直连域名时，同时补充这两处配置。
+- 其他外网 TCP 连接：`dev → proxy → airport → residential → 目标`。
 - 普通 UDP 和 ICMP：不转发。HTTP CONNECT 家宽代理不能承载普通 UDP；QUIC/HTTP3、UDP 工具及部分实时音视频因此不可用，支持回退的客户端可使用 TCP。
-- DNS：允许 `dev` 向网关发送 UDP/TCP DNS；Mihomo 再通过完整代理链访问 DoH。
+- DNS：允许 `dev` 向网关发送 UDP/TCP DNS；上述直连域名使用系统解析器，其他域名通过完整代理链访问 DoH。
 - 发往外部 DNS 地址的 53 端口流量也会在网关被接管；`dev` 的 Docker 内置 DNS 地址 `127.0.0.11` 被阻断，避免绕过网关。容器服务名解析因此不依赖 Docker DNS，内部转发使用固定 IP。
-- 代理节点域名的启动解析：模板使用网关的系统解析器（`proxy-server-nameserver: [system]`），仅用于建立代理链。部分机场域名在公共解析器下返回不同地址，因此不强制使用 Cloudflare 做节点启动解析。业务 DNS 仍经家宽代理访问 DoH，不设置直连回退。
+- 代理节点域名的启动解析：模板使用网关的系统解析器（`proxy-server-nameserver: [system]`），仅用于建立代理链。部分机场域名在公共解析器下返回不同地址，因此不强制使用 Cloudflare 做节点启动解析。除上述直连域名外，业务 DNS 仍经家宽代理访问 DoH，不设置直连回退。
 - IPv6：当前部署禁用。
 
-配置没有业务直连回退。网关关闭内核 IP 转发并设置 `FORWARD DROP`，业务 TCP 在网关本地由 Mihomo 接收、重新建立代理连接；代理停止或上游不可用时应失败，而不是直连外网。
+上述域名明确配置直连，其他业务没有直连回退。网关关闭内核 IP 转发并设置 `FORWARD DROP`，业务 TCP 在网关本地由 Mihomo 接收、重新建立代理连接；代理停止或上游不可用时应失败，而不是直连外网。
 
-网关的固定开发服务入站 tunnel，以及节点域名启动解析，是明确的本地转发/启动路径，不是按网站分流。
+网关的固定开发服务入站 tunnel，以及节点域名启动解析，另有明确的本地转发/启动路径。
 
 ## 重启与修改
 
