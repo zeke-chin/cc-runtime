@@ -10,6 +10,10 @@
 # Rust 在 ~/.cargo/bin，Claude Code 在 ~/.local/bin
 export PATH="/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 
+# 镜像已生成 en_US.UTF-8；这里再导出一次，防止被外部环境覆盖成不存在的 locale。
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
 #
 # History
 #

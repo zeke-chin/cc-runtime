@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y \
     # gcc、make 等编译工具，用来构建原生依赖
     fonts-noto-cjk \
     # 思源黑体等中文字体，桌面和终端能正常显示中文
+    locales \
+    # 提供 locale-gen，生成 UTF-8 locale，vim、less、tmux 才能正确处理中文
     ripgrep \
     # rg，按内容快速搜索代码
     zsh \
@@ -60,6 +62,11 @@ RUN apt-get update && apt-get install -y \
     zoxide \
     # 按使用频率跳转目录，命令 z / zi
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 生成 UTF-8 locale 并设为全局默认，否则 vim 等程序回退到 C locale，中文显示乱码。
+RUN locale-gen en_US.UTF-8 && update-locale LANG=en_US.UTF-8
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # 安装 uv，作为唯一的 Python 开发工具
 RUN curl -LsSf https://astral.sh/uv/install.sh | \
