@@ -1,6 +1,7 @@
 services:
   dev:
     image: ghcr.io/zeke-chin/cc-runtime:latest
+    entrypoint: [/bin/bash, /usr/local/bin/entrypoint.sh]
     restart: unless-stopped
     cap_drop: [NET_RAW]
     sysctls:
@@ -13,7 +14,13 @@ services:
       TZ: America/New_York
     volumes:
       - type: bind
-        source: ./dev-home
+        source: ./dev-runtime/ssh-host-keys
+        target: /var/lib/cc-runtime/ssh
+        bind:
+          create_host_path: false
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - type: bind
+        source: ./dev-runtime/home
         target: /home/dev
         bind:
           create_host_path: false
@@ -26,6 +33,30 @@ services:
     networks:
       private:
         ipv4_address: 172.30.0.10
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    restart: unless-stopped
+    environment:
+      TS_HOSTNAME: ${TS_HOSTNAME:-cc-dev}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      # Allow time for the first interactive browser login (default is only 60s).
+      TS_BOOT_TIMEOUT: 30m
+      TS_USERSPACE: "true"
+      TS_ACCEPT_DNS: "false"
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - type: bind
+        source: ./tailscale/state
+        target: /var/lib/tailscale
+        bind:
+          create_host_path: false
+      - ./tailscale/config:/config:ro
+    networks:
+      private:
+        ipv4_address: 172.30.0.3
+      outbound: {}
 
   proxy:
     image: metacubex/mihomo:latest

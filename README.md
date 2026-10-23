@@ -7,6 +7,8 @@
 ```mermaid
 flowchart LR
     H[宿主机 SSH / VNC / noVNC] --> P[proxy: Mihomo 网关]
+    C[外部电脑: Tailscale] --> T[tailscale: cc-dev]
+    T -->|SSH TCP 22| D
     P -->|入站：私网直连| D[dev: 开发容器]
     D -->|出站：私网默认网关| P
     P --> A[机场节点]
@@ -14,12 +16,13 @@ flowchart LR
     R --> W[外网]
 ```
 
-两个常驻容器拥有独立的网络命名空间：
+三个常驻容器拥有独立的网络命名空间：
 
 | 服务 | 网络 | 职责 |
 |---|---|---|
 | `dev` | 仅私网，`172.30.0.10` | 开发工具、SSH 和远程桌面 |
 | `proxy` | 私网 `172.30.0.2` + 出口网络 | TCP 透明代理、DNS、开发服务入站转发 |
+| `tailscale` | 私网 `172.30.0.3` + 出口网络 | Tailscale 接入，仅转发 SSH 到 `dev:22` |
 | `dev-network-init` | 临时共享 `dev` 的网络命名空间 | 设置默认路由和 DNS 防绕过规则，然后退出 |
 
 `dev` 不设置代理环境变量，也不共享 `proxy` 的网络、配置和凭据。只有临时初始化容器获得 `NET_ADMIN`；开发容器不保留该权限，并移除了 `NET_RAW`。
@@ -36,9 +39,13 @@ proxy/resolv.conf               开发容器使用网关 DNS
 scripts/proxy-entrypoint.sh     网关防火墙初始化与 Mihomo 启动
 scripts/dev-network-init.sh     开发容器网络初始化，完成后退出
 scripts/dev.py                  扫描依赖、初始化总卷、管理 Compose
+tailscale/config/serve.json      Tailscale 私网 SSH 转发配置
+tailscale/state/                Tailscale 登录状态，不提交 Git、不进入镜像构建
+AGENTS.md                      服务目录和持久化约定
 dependency-rules.json           项目标记与目录隔离规则
 .runtime/                      自动生成的挂载配置和路径清单，不提交 Git
-dev-home/                      dev 家目录的宿主机存储，不提交 Git、不进入镜像构建
+dev-runtime/home/                       dev 家目录的宿主机存储，不提交 Git、不进入镜像构建
+dev-runtime/ssh-host-keys/              SSH 主机密钥的宿主机存储，不提交 Git、不进入镜像构建
 ```
 
 `proxy` 和临时辅助容器直接使用 `metacubex/mihomo:latest`，不构建代理镜像。该镜像已包含脚本使用的 `ip`、`iptables`、`nc` 和 shell。这里使用 TCP REDIRECT，不需要 TUN 或 `/dev/net/tun`。
@@ -96,6 +103,42 @@ dev-home/                      dev 家目录的宿主机存储，不提交 Git�
 
 这些连接由 Mihomo 的固定 `DIRECT` tunnel 在 Docker 私网转发，**不经过机场或家宽代理**。开发工作区直接绑定宿主机 `/Users/zeke/workspace` 到容器 `/home/dev/workspace`，两端文件修改会互相可见。迁移到 Linux 时需修改宿主机路径并确保开发用户具有写权限；入口脚本不会递归修改已有工作区的所有者。
 
+### 通过 Tailscale 远程 SSH
+
+`tailscale` 使用独立网络命名空间和 userspace 网络模式，不需要 TUN、`NET_ADMIN` 或宿主机端口映射。它直接连接外网，并通过 Tailscale Serve 的 TCP 转发把 tailnet 内的 `22` 端口送到 `172.30.0.10:22`。SSH 握手和用户认证由 `dev` 的 OpenSSH 完成，不启用 Tailscale SSH、Funnel、子网路由或出口节点。开发容器的出站仍经过原有 Mihomo 网关。
+
+首次执行 `python3 scripts/dev.py up` 后查看登录链接（首次启动预留 30 分钟完成浏览器登录）：
+
+```bash
+python3 scripts/dev.py compose logs tailscale
+```
+
+在浏览器打开日志中的 `https://login.tailscale.com/a/...` 链接，登录自己的 tailnet 并批准设备。如果 tailnet 开启设备审批，还需完成审批。然后在 Tailscale 管理后台的 Machines 页面为 `cc-dev` 设置 **Disable key expiry**，避免无人值守设备到期要求重新认证。此设置需要在账号后台完成，保存容器状态本身不会关闭密钥过期。
+
+外部电脑加入同一个 tailnet 后：
+
+```bash
+ssh dev@cc-dev
+# 未启用 MagicDNS 时，改用以下命令显示的 Tailscale IPv4 地址：
+python3 scripts/dev.py compose exec tailscale tailscale ip -4
+```
+
+默认设备名为 `cc-dev`，可通过 `.env` 的 `TS_HOSTNAME` 修改；名称冲突时以管理后台实际名称为准。tailnet 的 ACL/grants 需要允许客户端访问该设备 TCP 22。首次使用新设备名/IP 连接时，客户端仍可能要求确认一次 SSH 指纹。
+
+`tailscale/config/serve.json` 只开放 SSH；远程桌面和其他开发端口不自动开放。可以先用 SSH 端口转发访问，例如 `ssh -L 6080:127.0.0.1:6080 dev@cc-dev`，然后打开本机 `http://127.0.0.1:6080/vnc.html`。
+
+Tailscale 登录状态保存在宿主机 `tailscale/state/`，挂载到 `/var/lib/tailscale`，设置 `TS_AUTH_ONCE=true` 后重启和重建继续复用身份。不要删除该目录或同时给另一台在线设备复用它。首次认证无需把 auth key 写入项目。
+
+### SSH 主机密钥持久化
+
+服务端主机密钥保存在宿主机 `./dev-runtime/ssh-host-keys/` 目录，挂到 `/var/lib/cc-runtime/ssh`。启动时只为缺失的密钥生成新值，校验已有密钥，并通过 sshd 的 `HostKey` 配置引用；不挂载整个 `/etc/ssh`。新镜像不携带默认主机密钥。Compose 挂载仓库的 `entrypoint.sh`，现有开发镜像也可以立即使用这套启动逻辑。
+
+`scripts/dev.py prepare` / `up` 在第一次初始化主机密钥目录时，会从现有 `dev` 容器（包括已停止的容器）迁移主机密钥，再执行重建。**首次升级先执行这两个命令之一，不要先删除旧容器或直接用 Compose 重建。** 如果已经没有旧容器和密钥备份，就只能生成新身份，客户端需要核对新指纹后更新信任记录。
+
+客户端登录公钥仍在 `dev-runtime/home/.ssh/authorized_keys`，已随整个 `/home/dev` 持久化，不需要额外挂载。SSH 主机身份与用户登录授权是两套不同的数据。
+
+SSH 密钥目录和 Tailscale 状态目录由启动脚本初始化，普通 `down` 和 `down -v` 均保留。迁移机器时需同时备份、恢复 `dev-runtime/ssh-host-keys/`、`tailscale/state/` 和 `dev-runtime/home/`，并停止旧机器上的同一 Tailscale 身份。不要将私钥或 Tailscale 状态提交 Git。重启/重建会中断已有会话，但保留这些数据后不需要重新配置客户端密钥。
+
 ### Mihomo 控制 API（不部署 UI）
 
 在你已有的 Clash/Mihomo 面板中填写：
@@ -113,19 +156,19 @@ python3 scripts/dev.py compose up -d --no-deps --force-recreate proxy
 
 ### 持久化 dev 家目录
 
-当前目录下的 `dev-home/` 绑定到容器 `/home/dev`。Shell 配置、Claude 登录状态、SSH 文件和用户安装的工具等会保留在这里，容器重建后仍然可用。
+当前目录下的 `dev-runtime/home/` 绑定到容器 `/home/dev`。Shell 配置、Claude 登录状态、SSH 文件和用户安装的工具等会保留在这里，容器重建后仍然可用。
 
 ```text
-./dev-home                    → /home/dev
+./dev-runtime/home                    → /home/dev
 /Users/zeke/workspace          → /home/dev/workspace（单独覆盖挂载）
 依赖总卷的缓存子目录          → /home/dev/.cache（单独覆盖挂载）
 ```
 
 `python3 scripts/dev.py up` / `prepare` 会在第一次使用家目录时，从已经构建的开发镜像复制 `/home/dev` 中的初始工具和配置，保留文件权限和符号链接。已有同名文件不覆盖；不复制镜像中的 `workspace`、`.cache`。Claude 和 Rust 在 Dockerfile 切换到 `USER dev` 后安装，分别位于 `~/.local` 和 `~/.cargo` / `~/.rustup`。Rust 使用 minimal profile，避免可选离线文档的大小写文件名在 macOS 挂载目录发生冲突。初始化完成后写入 `.cc-runtime-home-initialized` 标记，后续启动不重复复制，也不会用新镜像覆盖用户改动。因此重建镜像不会自动升级持久化家目录中的 Claude/Rust 等工具，需要在容器里自行更新。
 
-仓库本身位于宿主机 workspace 中，**这允许嵌套挂载，不会自动把整个 workspace 递归复制进家目录**。容器也能通过 `/home/dev/workspace/github_work/cc-runtime/dev-home` 看到家目录的底层文件；这个别名下的 `workspace` 不承载 `/home/dev/workspace` 的子挂载。扫描器会根据家目录挂载路径自动跳过它，避免将家目录中的工具、依赖和缓存当成工作项目扫描。
+仓库本身位于宿主机 workspace 中，**这允许嵌套挂载，不会自动把整个 workspace 递归复制进家目录**。容器也能通过 `/home/dev/workspace/github_work/cc-runtime/dev-runtime/home` 看到家目录的底层文件；这个别名下的 `workspace` 不承载 `/home/dev/workspace` 的子挂载。扫描器会根据家目录挂载路径自动跳过它，避免将家目录中的工具、依赖和缓存当成工作项目扫描。
 
-`dev-home/` 已加入 Git 与 Docker 构建忽略列表。它存放的是 Linux 开发环境数据，不是 macOS 的用户家目录；不要把其中的 Linux 工具直接用于 Mac，切换容器 CPU 架构时也需要重新安装相关二进制工具。备份家目录可复制 `dev-home/`，但工作区与依赖缓存属于另外两个挂载，需要分别备份。
+`dev-runtime/home/` 已加入 Git 与 Docker 构建忽略列表。它存放的是 Linux 开发环境数据，不是 macOS 的用户家目录；不要把其中的 Linux 工具直接用于 Mac，切换容器 CPU 架构时也需要重新安装相关二进制工具。备份家目录可复制 `dev-runtime/home/`，但工作区与依赖缓存属于另外两个挂载，需要分别备份。
 
 Playwright 的系统依赖由 root 安装，Chromium 由 dev 下载到 `/home/dev/.local/share/ms-playwright`，通过 `PLAYWRIGHT_BROWSERS_PATH` 统一指定安装和运行时路径，避免浏览器落在 `/root` 或被缓存卷覆盖。首次初始化家目录时会一起复制浏览器；已有初始化标记的家目录不会自动补装，可在更新镜像并重建容器后，以 dev 执行 `playwright install chromium`。
 
@@ -241,7 +284,7 @@ python3 scripts/dev.py up
 python3 scripts/dev.py compose run --rm dev-network-init
 ```
 
-普通停止使用 `python3 scripts/dev.py compose down`，宿主机工作区、`dev-home` 和外部依赖总卷均保留。原来的 `workspace` 命名卷不会自动迁移到本地目录，也不会被此次配置修改删除。
+普通停止使用 `python3 scripts/dev.py compose down`，宿主机工作区、`dev-runtime/home` 和外部依赖总卷均保留。原来的 `workspace` 命名卷不会自动迁移到本地目录，也不会被此次配置修改删除。
 
 网段暂固定为 `172.30.0.0/24`。如与宿主机、VPN 或已有 Docker 网络冲突，需要同步修改 Compose、两个初始化脚本、`proxy/resolv.conf` 和 Mihomo tunnel 目标。
 
@@ -278,3 +321,9 @@ CC_RUNTIME_DOCKER_TEST=1 python3 -m unittest discover -s tests -v
 第二条使用临时工作区和临时卷执行 Docker 集成测试，结束后清理测试资源，不使用真实代理账号。当前工作区已完成实际镜像构建和部署，SSH/VNC 握手、noVNC 页面及控制 API 鉴权验证通过。家目录初始化及其与工作区的嵌套挂载另有 Docker 集成测试，验证初始工具复制、用户文件不覆盖、重复初始化保留改动，以及两个挂载都能写回宿主机。
 
 实际启动中已适配当前 TigerVNC 的 `~/.config/tigervnc` 配置目录，并显式启动 XFCE；不再依赖旧 `~/.vnc` 目录迁移。
+
+本次远程接入验证：SSH 主机密钥从现有容器迁移到本地目录，重建后指纹保持一致；Tailscale 重建后保持设备 ID 和 IP，且无需重新认证；通过 Tailscale TCP 转发实际 SSH 登录到 `dev` 成功。密钥迁移的 Docker 集成测试覆盖已停止容器迁移、重复初始化不覆盖和损坏密钥拒绝使用：
+
+```bash
+CC_RUNTIME_DOCKER_TEST=1 python3 -m unittest discover -s tests -p test_identity.py -v
+```

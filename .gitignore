@@ -3,3 +3,7 @@ proxy/config.yaml
 .runtime/
 __pycache__/
 dev-home/
+ssh-host-keys/
+dev-runtime/home/
+dev-runtime/ssh-host-keys/
+tailscale/state/

@@ -78,7 +78,34 @@ EOF
     sudo chown dev:dev "$README_FILE"
 fi
 
+# Keep deployment identity outside the replaceable image and user home.
+sudo bash <<'SSH_KEYS'
+set -eu
+key_dir=/var/lib/cc-runtime/ssh
+install -d -m 700 -o root -g root "$key_dir"
+umask 077
+for type in rsa ecdsa ed25519; do
+    key="$key_dir/ssh_host_${type}_key"
+    if [ ! -e "$key" ]; then
+        ssh-keygen -q -t "$type" -N '' -f "$key"
+    fi
+    chown root:root "$key"
+    chmod 600 "$key"
+    # Fail on corrupt keys rather than silently changing the host identity.
+    ssh-keygen -y -f "$key" > "$key.pub"
+    chmod 644 "$key.pub"
+done
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/00-cc-hostkeys.conf <<'CONFIG'
+HostKey /var/lib/cc-runtime/ssh/ssh_host_rsa_key
+HostKey /var/lib/cc-runtime/ssh/ssh_host_ecdsa_key
+HostKey /var/lib/cc-runtime/ssh/ssh_host_ed25519_key
+CONFIG
+SSH_KEYS
+
 sudo sed -i "s/^#*Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
+sudo mkdir -p /run/sshd
+sudo /usr/sbin/sshd -t
 sudo /etc/init.d/ssh start
 echo "✅ SSH server started on port $SSH_PORT."
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,31 @@ RULES = json.loads((ROOT / "dependency-rules.json").read_text())
 
 
 class ScannerTests(unittest.TestCase):
+    def test_generate_excludes_private_identity_storage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "dependency-rules.json").write_text(json.dumps(RULES))
+            for name in ("home", "host-keys", "tailscale-state"):
+                directory = root / name
+                directory.mkdir()
+                (directory / "package.json").touch()
+                # Scanning private state would encounter this invalid dependency mount.
+                (directory / "node_modules").symlink_to("/does-not-exist")
+            model = {"name": "test", "services": {
+                "dev": {"volumes": [
+                    {"type": "bind", "source": str(root), "target": dev.WORKSPACE_TARGET},
+                    {"type": "bind", "source": str(root / "home"), "target": "/home/dev"},
+                    {"type": "bind", "source": str(root / "host-keys"),
+                     "target": "/var/lib/cc-runtime/ssh"}]},
+                "tailscale": {"volumes": [{"type": "bind", "source": str(root / "tailscale-state"),
+                                             "target": "/var/lib/tailscale"}]}}}
+            with patch.object(dev, "ROOT", root), patch.object(dev, "STATE", root / ".runtime"), \
+                    patch.object(dev, "OVERLAY", root / ".runtime/compose.json"), \
+                    patch.object(dev, "compose", return_value=json.dumps(model)), \
+                    patch.object(dev, "run", return_value="aarch64"):
+                _, plan = dev.generate()
+            self.assertEqual(plan["entries"], [])
+
     def test_project_detection_preserves_source_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

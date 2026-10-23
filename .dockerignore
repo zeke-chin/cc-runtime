@@ -9,3 +9,6 @@ dependency-rules.json
 tests/
 __pycache__/
 dev-home/
+ssh-host-keys/
+dev-runtime/
+tailscale/

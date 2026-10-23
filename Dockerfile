@@ -85,7 +85,8 @@ RUN useradd -m -s /bin/zsh dev && \
     echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # 配置 SSH
-RUN sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+RUN sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && rm -f /etc/ssh/ssh_host_*
 
 # 安装 Node.js、pnpm 和 Playwright
 RUN curl -fsSL https://deb.nodesource.com/setup_23.x | bash - \

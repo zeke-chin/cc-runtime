@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".runtime"
@@ -150,6 +151,16 @@ def generate():
             raise ValueError("dev home must not contain the shared workspace")
         if workspace in home.parents:
             rules["exclude_paths"].append(home.relative_to(workspace).as_posix())
+    # Identity directories can be root-only on Linux and contain no project dependencies.
+    for service in model["services"].values():
+        for mount in service.get("volumes", []):
+            if mount["type"] == "bind" and mount["target"] in {
+                    "/var/lib/cc-runtime/ssh", "/var/lib/tailscale"}:
+                identity = Path(mount["source"]).resolve()
+                if identity == workspace or identity in workspace.parents:
+                    raise ValueError("Identity storage must not contain the shared workspace")
+                if workspace in identity.parents:
+                    rules["exclude_paths"].append(identity.relative_to(workspace).as_posix())
     entries, symlinks = scan(workspace, rules)
     architecture = run(["docker", "info", "--format", "{{.Architecture}}"], capture=True).strip()
     if not architecture or not all(c.isalnum() or c in "_-" for c in architecture):
@@ -207,6 +218,61 @@ done
         input="\n".join(paths) + "\n")
 
 
+def initialize_identity(model, image):
+    """Preserve the existing SSH identity before Compose replaces dev."""
+    ssh_mount = next(m for m in model["services"]["dev"]["volumes"]
+                     if m["target"] == "/var/lib/cc-runtime/ssh")
+    if ssh_mount["type"] != "bind":
+        raise ValueError("SSH host keys must use a bind mount")
+    ssh_directory = Path(ssh_mount["source"]).resolve()
+    ssh_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tailscale_mount = next(m for m in model["services"]["tailscale"]["volumes"]
+                          if m["target"] == "/var/lib/tailscale")
+    if tailscale_mount["type"] != "bind":
+        raise ValueError("Tailscale state must use a bind mount")
+    Path(tailscale_mount["source"]).mkdir(parents=True, exist_ok=True, mode=0o700)
+    helper = ["docker", "run", "--rm", "--network", "none", "--user", "0:0",
+              "--mount", f"type=bind,source={ssh_directory},target=/keys"]
+    existing = run(helper + ["--entrypoint", "/bin/sh", image, "-c",
+                            'find /keys -name "ssh_host_*_key" -print'], capture=True)
+    if existing.strip():
+        run(helper + ["--entrypoint", "/bin/sh", image, "-c",
+                      'set -eu; for type in rsa ecdsa ed25519; do '
+                      'ssh-keygen -y -f "/keys/ssh_host_${type}_key" > /dev/null; done'])
+        return  # Never overwrite an established persistent identity.
+    container = compose("ps", "--all", "--quiet", "dev", capture=True).strip()
+    if not container:
+        return  # First deployment: entrypoint generates fresh keys in the directory.
+    if len(container.splitlines()) != 1:
+        raise ValueError("Expected exactly one dev container for SSH identity migration")
+    mounts = json.loads(run(["docker", "inspect", "--format", "{{json .Mounts}}", container],
+                            capture=True))
+    old_directory = ("/var/lib/cc-runtime/ssh" if any(
+        m["Destination"] == "/var/lib/cc-runtime/ssh" for m in mounts) else "/etc/ssh")
+    with tempfile.TemporaryDirectory(prefix="cc-ssh-migration-") as temporary:
+        # docker cp also works with a stopped container; do not print key material.
+        source = Path(temporary) / "ssh"
+        run(["docker", "cp", f"{container}:{old_directory}", str(source)])
+        if not all((source / f"ssh_host_{kind}_key").is_file()
+                   for kind in ("rsa", "ecdsa", "ed25519")):
+            raise ValueError("Existing dev host keys are incomplete; refusing to replace its identity")
+        script = '''set -eu
+umask 077
+for type in rsa ecdsa ed25519; do
+    ssh-keygen -y -f "/source/ssh_host_${type}_key" > /dev/null
+done
+chmod 700 /keys
+for type in rsa ecdsa ed25519; do
+    cp "/source/ssh_host_${type}_key" "/keys/ssh_host_${type}_key"
+    chown root:root "/keys/ssh_host_${type}_key"
+    chmod 600 "/keys/ssh_host_${type}_key"
+done
+'''
+        run(helper + ["--mount", f"type=bind,source={source},target=/source,readonly",
+                      "--entrypoint", "/bin/sh", image, "-c", script])
+    print("Preserved existing dev SSH host keys in the host directory.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -250,6 +316,7 @@ def main():
                            if m["target"] == "/home/dev"), None)
         if home_mount:
             initialize_home(image, Path(home_mount["source"]).resolve(), *map(int, ids))
+        initialize_identity(model, image)
         initialize(plan, *map(int, ids))
         print("Dependency subdirectories initialized; host dependencies were not copied.", flush=True)
         if args.command == "up":
