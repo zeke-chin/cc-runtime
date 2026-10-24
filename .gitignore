@@ -7,3 +7,6 @@ ssh-host-keys/
 dev-runtime/home/
 dev-runtime/ssh-host-keys/
 tailscale/state/
+
+
+docs/local/

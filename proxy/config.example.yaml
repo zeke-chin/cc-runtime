@@ -47,7 +47,10 @@ dns:
     '+.weimob.com': system
     '+.hsmob.com': system
     '+.weimobqa.com': system
+    '+.weimobpl.com': system
     '+.tencent.com': system
+    '+.myqcloud.com': system
+    'herdr.dev': system
   # Other workload DNS uses the full chain; no direct fallback.
   nameserver:
     - 'https://1.1.1.1/dns-query#residential'
@@ -73,5 +76,12 @@ rules:
   - DOMAIN-SUFFIX,weimob.com,DIRECT
   - DOMAIN-SUFFIX,hsmob.com,DIRECT
   - DOMAIN-SUFFIX,weimobqa.com,DIRECT
+  - DOMAIN-SUFFIX,weimobpl.com,DIRECT
   - DOMAIN-SUFFIX,tencent.com,DIRECT
+  - DOMAIN,herdr.dev,DIRECT
+  - DOMAIN-SUFFIX,myqcloud.com,DIRECT
+  - DOMAIN-SUFFIX,pythonhosted.org,airport
+  - DOMAIN,pypi.org,airport
+  - DOMAIN-SUFFIX,anthropic.com,residential
+  - DOMAIN-SUFFIX,datadoghq.com,residential
   - MATCH,residential

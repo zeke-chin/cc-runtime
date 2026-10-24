@@ -252,7 +252,7 @@ python3 scripts/dev.py compose down
 
 ## 出站与 DNS 策略
 
-- `weimob.com`、`hsmob.com`、`weimobqa.com`、`tencent.com` 及其所有子域名：通过 `DOMAIN-SUFFIX` 优先匹配 `DIRECT`，经 Docker 出口使用宿主机网络访问目标；DNS 通过 `nameserver-policy` 使用网关系统解析器（Docker DNS 转发到宿主机侧）。宿主机需已连上公司网络或 VPN，Docker 出口也需能访问相应内网。新增直连域名时，同时补充这两处配置。
+- `weimob.com`、`hsmob.com`、`weimobqa.com`、`weimobpl.com`、`tencent.com` 及其所有子域名：通过 `DOMAIN-SUFFIX` 优先匹配 `DIRECT`，经 Docker 出口使用宿主机网络访问目标；DNS 通过 `nameserver-policy` 使用网关系统解析器（Docker DNS 转发到宿主机侧）。宿主机需已连上公司网络或 VPN，Docker 出口也需能访问相应内网。新增直连域名时，同时补充这两处配置。
 - 其他外网 TCP 连接：`dev → proxy → airport → residential → 目标`。
 - 普通 UDP 和 ICMP：不转发。HTTP CONNECT 家宽代理不能承载普通 UDP；QUIC/HTTP3、UDP 工具及部分实时音视频因此不可用，支持回退的客户端可使用 TCP。
 - DNS：允许 `dev` 向网关发送 UDP/TCP DNS；上述直连域名使用系统解析器，其他域名通过完整代理链访问 DoH。
