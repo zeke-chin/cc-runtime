@@ -356,6 +356,31 @@ done
     print("Preserved existing dev SSH host keys in the host directory.", flush=True)
 
 
+# Compose subcommands that create containers and therefore need a fresh mount plan.
+CREATING_SUBCOMMANDS = {"up", "create", "run"}
+
+
+def prepare(model, plan):
+    """Initialize the home, identity and dependency subpaths for the current plan."""
+    image = model["services"]["dev"].get("image", model["name"] + "-dev")
+    try:
+        run(["docker", "image", "inspect", "--format", "{{.Id}}", image], capture=True)
+    except subprocess.CalledProcessError:
+        raise ValueError(f"Local image {image!r} is missing. Run 'python3 scripts/dev.py up' "
+                         f"to pull it, or tag your existing image as {image}.") from None
+    ids = run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh",
+               image, "-c", "id -u dev; id -g dev"], capture=True).split()
+    if len(ids) != 2 or not all(i.isdecimal() for i in ids):
+        raise ValueError("Could not determine dev user UID/GID from the built image")
+    home_mount = next((m for m in model["services"]["dev"]["volumes"]
+                       if m["target"] == "/home/dev"), None)
+    if home_mount:
+        initialize_home(image, Path(home_mount["source"]).resolve(), *map(int, ids))
+    initialize_identity(model, image)
+    initialize(plan, *map(int, ids))
+    print("Dependency subdirectories initialized; host dependencies were not copied.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -364,7 +389,8 @@ def main():
     up = sub.add_parser("up", help="Pull image, scan, initialize, and recreate services")
     up.add_argument("--no-pull", "--no-build", dest="no_pull", action="store_true",
                     help="Use the local image without pulling (--no-build is a legacy alias)")
-    passthrough = sub.add_parser("compose", help="Run Compose with the generated mounts")
+    passthrough = sub.add_parser(
+        "compose", help="Run Compose with the generated mounts; up/create/run rescan first")
     passthrough.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     STATE.mkdir(exist_ok=True)
@@ -376,8 +402,13 @@ def main():
         except BlockingIOError:
             raise ValueError("Another dev.py command is still running; wait for it to finish and retry.") from None
         if args.command == "compose":
-            if not OVERLAY.exists():
-                raise ValueError("Run 'python3 scripts/dev.py up' first")
+            # Never create containers from a stale plan: rescan and initialize first.
+            # Match anywhere: global options may take values ("--profile x up").
+            # A false positive only costs an extra scan.
+            if CREATING_SUBCOMMANDS.intersection(args.args):
+                prepare(*generate())
+            elif not OVERLAY.exists():
+                raise ValueError("Run 'python3 scripts/dev.py prepare' first")
             compose(*args.args, overlay=True)
             return
         model, plan = generate()
@@ -385,23 +416,7 @@ def main():
             return
         if args.command == "up" and not args.no_pull:
             compose("pull", "dev")
-        image = model["services"]["dev"].get("image", model["name"] + "-dev")
-        try:
-            run(["docker", "image", "inspect", "--format", "{{.Id}}", image], capture=True)
-        except subprocess.CalledProcessError:
-            raise ValueError(f"Local image {image!r} is missing. Run 'python3 scripts/dev.py up' "
-                             f"to pull it, or tag your existing image as {image}.") from None
-        ids = run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh",
-                   image, "-c", "id -u dev; id -g dev"], capture=True).split()
-        if len(ids) != 2 or not all(i.isdecimal() for i in ids):
-            raise ValueError("Could not determine dev user UID/GID from the built image")
-        home_mount = next((m for m in model["services"]["dev"]["volumes"]
-                           if m["target"] == "/home/dev"), None)
-        if home_mount:
-            initialize_home(image, Path(home_mount["source"]).resolve(), *map(int, ids))
-        initialize_identity(model, image)
-        initialize(plan, *map(int, ids))
-        print("Dependency subdirectories initialized; host dependencies were not copied.", flush=True)
+        prepare(model, plan)
         if args.command == "up":
             compose("up", "-d", "--force-recreate", overlay=True)
 

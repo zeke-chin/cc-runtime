@@ -248,6 +248,8 @@ python3 scripts/dev.py compose down
 
 `.runtime/compose.dependencies.json` 是自动生成的 Compose 附加文件。**启用隔离后，通过上述脚本启动，不要直接用裸 `docker compose up`**，否则不会加载这些挂载。扫描后无需手工编辑生成文件。
 
+`python3 scripts/dev.py compose ...` 中凡包含 `up`、`create`、`run` 的命令，都会先重新扫描并初始化（等同 `prepare`），再交给 Compose，避免用过期的挂载计划创建容器；扫描失败时不会创建容器。`ps`、`logs`、`exec`、`down` 等命令直接使用现有计划。
+
 新增项目、worktree，或者创建了此前无法从项目标记预测的缓存目录，需要重新执行 `up --no-pull`。更新挂载会重建容器并中断开发会话；普通源码修改实时共享，不需要重新扫描或重启。运行中不自动热插拔挂载，新增目录在重新扫描前仍属于宿主机共享路径。
 
 #### 自定义规则与清理
