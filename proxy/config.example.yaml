@@ -1,7 +1,13 @@
-# Copy to config.yaml and replace both proxies before starting.
+# Shared template for every gateway config (config.yaml, config-california.yaml).
+# Edit this file FIRST, then apply the same change to each derived config.
+# See proxy/README.md for the derivation rules.
+#
+# Everything outside "GATEWAY-SPECIFIC" blocks must stay identical across the
+# derived configs, except placeholder values (REPLACE_*, *.example.com, 192.0.2.x).
+# The blocks below show the main residential gateway (config.yaml).
+#
 # This file is native Mihomo YAML: Compose does NOT expand variables here.
 # Controller address and secret are provided by proxy-entrypoint.sh from .env.
-# Connect your own UI to http://127.0.0.1:19090; no UI is deployed here.
 mode: rule
 log-level: info
 ipv6: false
@@ -19,6 +25,9 @@ proxies:
     cipher: chacha20-ietf-poly1305
     password: REPLACE_AIRPORT_PASSWORD
 
+  # ==== GATEWAY-SPECIFIC: egress proxy ====
+  # The final egress node. config-california.yaml uses a VLESS Reality node
+  # named "california" with dialer-proxy: california-upstream instead.
   - name: residential
     type: http
     server: residential.example.com
@@ -26,7 +35,37 @@ proxies:
     username: REPLACE_RESIDENTIAL_USER
     password: REPLACE_RESIDENTIAL_PASSWORD
     # For an HTTPS proxy, also set tls: true (only if the provider supports it).
-    dialer-proxy: airport
+    dialer-proxy: residential-upstream
+  # ==== END GATEWAY-SPECIFIC ====
+
+proxy-groups:
+  # Rules and DNS refer only to "egress"; each gateway points it at its own node.
+  # ==== GATEWAY-SPECIFIC: egress groups ====
+  - name: egress
+    type: select
+    proxies:
+      - residential
+  - name: residential-upstream
+    type: select
+    proxies:
+      - default
+      - weimob
+  - name: default
+    type: select
+    hidden: true
+    proxies:
+      - airport
+  - name: weimob
+    type: select
+    hidden: true
+    proxies:
+      - DIRECT
+  # ==== END GATEWAY-SPECIFIC ====
+
+# ==== GATEWAY-SPECIFIC: listeners ====
+# Main gateway: none. config-california.yaml adds a host-only mixed listener
+# on 0.0.0.0:7890 (published as 127.0.0.1:17890).
+# ==== END GATEWAY-SPECIFIC ====
 
 dns:
   enable: true
@@ -39,25 +78,35 @@ dns:
   default-nameserver:
     - https://1.1.1.1/dns-query
   # Bootstrap only: use the gateway system resolver for proxy server names.
-  # Other workload DNS below uses DoH through the residential chain.
+  # Prefer server IPs for egress nodes to avoid this dependency.
   proxy-server-nameserver:
     - system
   # Direct domains use the Docker system resolver backed by the host DNS.
   nameserver-policy:
+    'host.docker.internal': system
+    '+.aliyuncs.com': system
     '+.weimob.com': system
     '+.hsmob.com': system
     '+.weimobqa.com': system
     '+.weimobpl.com': system
     '+.tencent.com': system
     '+.myqcloud.com': system
+    '+.edu.cn': system
     'herdr.dev': system
-  # Other workload DNS uses the full chain; no direct fallback.
+  # Other workload DNS uses DoH through the egress chain; no direct fallback.
   nameserver:
-    - 'https://1.1.1.1/dns-query#residential'
+    - 'https://1.1.1.1/dns-query#egress'
 
-# These fixed inbound tunnels are the ONLY intended DIRECT traffic to dev.
-# Host ports are bound to 127.0.0.1 by Compose.
+# ==== GATEWAY-SPECIFIC: tunnels ====
+# Fixed DIRECT tunnels. The host-SSH listener uses this gateway's private IP;
+# development-service tunnels target the dev container this gateway serves.
+# Published development-service ports are bound to 127.0.0.1 by Compose.
 tunnels:
+  # Dev-to-host SSH; private listener only, no published host port.
+  - network: [tcp]
+    address: 172.30.0.2:10023
+    target: host.docker.internal:22
+    proxy: DIRECT
   - network: [tcp]
     address: 0.0.0.0:10022
     target: 172.30.0.10:22
@@ -70,8 +119,15 @@ tunnels:
     address: 0.0.0.0:16080
     target: 172.30.0.10:6080
     proxy: DIRECT
+# ==== END GATEWAY-SPECIFIC ====
 
 rules:
+  - DOMAIN-SUFFIX,aliyuncs.com,DIRECT
+  - IP-CIDR,8.154.36.79/32,DIRECT,no-resolve
+  # Single host that must not traverse the proxy chain (fill in the real IP).
+  - IP-CIDR,192.0.2.10/32,DIRECT,no-resolve
+  # Local LAN subnet.
+  - IP-CIDR,192.168.31.0/24,DIRECT,no-resolve
   # Direct domains (including the apex) use the host network via Docker egress.
   - DOMAIN-SUFFIX,weimob.com,DIRECT
   - DOMAIN-SUFFIX,hsmob.com,DIRECT
@@ -80,8 +136,28 @@ rules:
   - DOMAIN-SUFFIX,tencent.com,DIRECT
   - DOMAIN,herdr.dev,DIRECT
   - DOMAIN-SUFFIX,myqcloud.com,DIRECT
+  # Domestic education network.
+  - DOMAIN-SUFFIX,edu.cn,DIRECT
   - DOMAIN-SUFFIX,pythonhosted.org,airport
   - DOMAIN,pypi.org,airport
-  - DOMAIN-SUFFIX,anthropic.com,residential
-  - DOMAIN-SUFFIX,datadoghq.com,residential
-  - MATCH,residential
+  # Dependency/toolchain, browser and build font downloads (shopify-lens).
+  - DOMAIN-SUFFIX,npmjs.org,airport
+  - DOMAIN,bun.sh,airport
+  - DOMAIN,nodejs.org,airport
+  - DOMAIN,astral.sh,airport
+  - DOMAIN,github.com,airport
+  - DOMAIN-SUFFIX,githubusercontent.com,airport
+  - DOMAIN,cdn.playwright.dev,airport
+  - DOMAIN,playwright.download.prss.microsoft.com,airport
+  - DOMAIN,playwright.azureedge.net,airport
+  - DOMAIN,fonts.googleapis.com,airport
+  - DOMAIN,fonts.gstatic.com,airport
+  - DOMAIN,deb.debian.org,airport
+  - DOMAIN,security.debian.org,airport
+  - DOMAIN-SUFFIX,anthropic.com,egress
+  - DOMAIN-SUFFIX,datadoghq.com,egress
+  # Rust toolchain, documentation and Cargo registry downloads.
+  - DOMAIN-SUFFIX,rust-lang.org,airport
+  - DOMAIN-SUFFIX,crates.io,airport
+  - DOMAIN-SUFFIX,docs.rs,airport
+  - MATCH,egress

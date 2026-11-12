@@ -33,8 +33,11 @@ flowchart LR
 compose.yaml                    服务、网络、权限、端口和挂载
 Dockerfile                      开发镜像
 entrypoint.sh                   初始化开发服务
-proxy/config.example.yaml       Mihomo 配置模板
-proxy/config.yaml               自行填写的实际配置，不提交 Git
+proxy/README.md                 网关配置说明与修改流程
+proxy/config.example.yaml       Mihomo 共有配置模板，实际配置均由它派生
+proxy/config.yaml               主网关实际配置（家宽出口），不提交 Git
+proxy/config-california.yaml    加州网关实际配置（加州节点出口），不提交 Git
+scripts/check-proxy-configs.py  检查实际配置与模板的共有部分是否一致
 proxy/resolv.conf               开发容器使用网关 DNS
 scripts/proxy-entrypoint.sh     网关防火墙初始化与 Mihomo 启动
 scripts/dev-network-init.sh     开发容器网络初始化，完成后退出
@@ -62,10 +65,12 @@ dev-runtime/ssh-host-keys/              SSH 主机密钥的宿主机存储，不
 2. 编辑 `proxy/config.yaml`：
 
    - 将 `airport` 替换为 Clash 订阅中的一个完整节点，保留名称 `airport` 和节点全部协议参数。不导入机场的分流规则。
-   - 填写 `residential` 的家宽 HTTP 代理地址、端口和账号密码，保留 `dialer-proxy: airport`。
+   - 填写 `residential` 的家宽 HTTP 代理地址、端口和账号密码，保留 `dialer-proxy: residential-upstream`。
    - 如果家宽提供的是 HTTPS 代理，按服务商要求增加 `tls: true`。
 
-   这是原生 Mihomo YAML，不会自动替换 `${变量}`。脚本会拒绝启动仍包含模板占位符的配置。
+   - 将规则中的 `192.0.2.10` 换成需要绕过代理链直连的主机 IP，不需要时可保留。
+
+   这是原生 Mihomo YAML，不会自动替换 `${变量}`。脚本会拒绝启动仍包含模板占位符的配置。模板结构、加州网关和以后的修改流程（先改模板，再同步各实际配置）见 [`proxy/README.md`](proxy/README.md)。
 
 3. 复制环境变量示例，并在 `.env` 中填写 `PASSWORD`，作为开发用户的 SSH/VNC 密码：
 
@@ -102,6 +107,16 @@ dev-runtime/ssh-host-keys/              SSH 主机密钥的宿主机存储，不
 | 浏览器 noVNC | `http://127.0.0.1:6080/vnc.html` | `172.30.0.10:6080` |
 
 这些连接由 Mihomo 的固定 `DIRECT` tunnel 在 Docker 私网转发，**不经过机场或家宽代理**。开发工作区直接绑定宿主机 `/Users/zeke/workspace` 到容器 `/home/dev/workspace`，两端文件修改会互相可见。迁移到 Linux 时需修改宿主机路径并确保开发用户具有写权限；入口脚本不会递归修改已有工作区的所有者。
+
+### 从开发容器 SSH 到 Mac 宿主机
+
+Mac 开启“系统设置 → 通用 → 共享 → 远程登录”后，在 `dev` 容器中执行：
+
+```bash
+ssh -p 10023 zeke@172.30.0.2
+```
+
+Mihomo 在私网地址 `172.30.0.2:10023` 监听，将 TCP 直接转发到 `host.docker.internal:22`。宿主机名称由网关通过系统 DNS 解析，`dev` 无需解析该名称。该端口不发布到宿主机；其他出站流量继续遵循现有代理策略。用户名请换成宿主机账户；首次连接时核对宿主机 SSH 指纹。此配置面向提供 `host.docker.internal` 的 macOS Docker 环境。
 
 ### 通过 Tailscale 远程 SSH
 
@@ -147,6 +162,8 @@ SSH 密钥目录和 Tailscale 状态目录由启动脚本初始化，普通 `dow
 - API Secret：与 `.env` 中的 `PASSWORD` 相同。
 
 网关入口脚本通过 Mihomo 的 `-ext-ctl` 和 `-secret` 参数开启 API，无需将密码另写进代理 YAML。容器内监听 `9090`，宿主机映射为 `19090`，避免与常见的本地代理控制端口混淆；默认仅限宿主机本机访问，不安装或下载 UI。
+
+在面板中切换 `residential-upstream` 上游组：`weimob` 为直连 residential（公司网络），`default` 为经 airport 连接 residential（家庭网络）。两种模式访问 Anthropic 都经过 residential。默认选择 `default`；切换对新连接生效，已有长连接需重连。`default` 和 `weimob` 是固定映射的隐藏组。
 
 修改 `.env` 后需要重新创建代理容器，单纯 `restart` 不会重新加载容器环境变量：
 
@@ -252,7 +269,7 @@ python3 scripts/dev.py compose down
 
 ## 出站与 DNS 策略
 
-- `weimob.com`、`hsmob.com`、`weimobqa.com`、`weimobpl.com`、`tencent.com` 及其所有子域名：通过 `DOMAIN-SUFFIX` 优先匹配 `DIRECT`，经 Docker 出口使用宿主机网络访问目标；DNS 通过 `nameserver-policy` 使用网关系统解析器（Docker DNS 转发到宿主机侧）。宿主机需已连上公司网络或 VPN，Docker 出口也需能访问相应内网。新增直连域名时，同时补充这两处配置。
+- `weimob.com`、`hsmob.com`、`weimobqa.com`、`weimobpl.com`、`tencent.com`、`edu.cn` 及其所有子域名：通过 `DOMAIN-SUFFIX` 优先匹配 `DIRECT`，经 Docker 出口使用宿主机网络访问目标；DNS 通过 `nameserver-policy` 使用网关系统解析器（Docker DNS 转发到宿主机侧）。宿主机需已连上公司网络或 VPN，Docker 出口也需能访问相应内网。新增直连域名时，同时补充这两处配置。
 - 其他外网 TCP 连接：`dev → proxy → airport → residential → 目标`。
 - 普通 UDP 和 ICMP：不转发。HTTP CONNECT 家宽代理不能承载普通 UDP；QUIC/HTTP3、UDP 工具及部分实时音视频因此不可用，支持回退的客户端可使用 TCP。
 - DNS：允许 `dev` 向网关发送 UDP/TCP DNS；上述直连域名使用系统解析器，其他域名通过完整代理链访问 DoH。
@@ -262,7 +279,7 @@ python3 scripts/dev.py compose down
 
 上述域名明确配置直连，其他业务没有直连回退。网关关闭内核 IP 转发并设置 `FORWARD DROP`，业务 TCP 在网关本地由 Mihomo 接收、重新建立代理连接；代理停止或上游不可用时应失败，而不是直连外网。
 
-网关的固定开发服务入站 tunnel，以及节点域名启动解析，另有明确的本地转发/启动路径。
+网关的固定开发服务入站 tunnel、开发容器到宿主机 SSH 的私网 tunnel，以及节点域名启动解析，另有明确的本地转发/启动路径。
 
 ## 重启与修改
 

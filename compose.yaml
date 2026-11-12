@@ -91,6 +91,45 @@ services:
       timeout: 3s
       retries: 12
 
+  # Second gateway whose final egress is the California node.
+  # Serves dev-california (CLIENT_IP).
+  proxy-california:
+    image: metacubex/mihomo:latest
+    environment:
+      PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
+      GATEWAY_IP: 172.30.0.4
+      CLIENT_IP: 172.30.0.11
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv6.conf.all.disable_ipv6: "1"
+    entrypoint: [/bin/sh, /scripts/proxy-entrypoint.sh]
+    volumes:
+      - ./scripts/proxy-entrypoint.sh:/scripts/proxy-entrypoint.sh:ro
+      - type: bind
+        source: ./proxy/config-california.yaml
+        target: /root/.config/mihomo/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      private:
+        ipv4_address: 172.30.0.4
+      outbound: {}
+    ports:
+      - "127.0.0.1:19091:9090"
+      - "127.0.0.1:17890:7890"
+      # dev-california SSH / VNC / noVNC via fixed DIRECT tunnels.
+      - "127.0.0.1:2223:10022"
+      - "127.0.0.1:5902:15901"
+      - "127.0.0.1:6081:16080"
+    healthcheck:
+      test: [CMD-SHELL, "nc -z 127.0.0.1 9090 && nc -z 127.0.0.1 53"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   # Only this short-lived helper shares dev's network namespace.
   # It never receives the proxy config or credentials.
   dev-network-init:

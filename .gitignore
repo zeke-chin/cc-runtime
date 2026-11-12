@@ -1,5 +1,6 @@
 .env
 proxy/config.yaml
+proxy/config-california.yaml
 .runtime/
 __pycache__/
 dev-home/
