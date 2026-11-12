@@ -52,6 +52,61 @@ services:
       private:
         ipv4_address: 172.30.0.10
 
+  # Second development machine; egress via proxy-california (California node).
+  # Distinct identity: own home, SSH host keys, machine-id and hostname.
+  dev-california:
+    image: ghcr.io/zeke-chin/cc-runtime:latest
+    hostname: dev-california
+    entrypoint: [/bin/bash, /usr/local/bin/entrypoint.sh]
+    restart: unless-stopped
+    cap_drop: [NET_RAW]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "1"
+    depends_on:
+      proxy-california:
+        condition: service_healthy
+    environment:
+      PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
+      TZ: America/Los_Angeles
+    volumes:
+      - type: bind
+        source: ./dev-california-runtime/ssh-host-keys
+        target: /var/lib/cc-runtime/ssh
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./dev-california-runtime/machine-id
+        target: /etc/machine-id
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./dev-california-runtime/machine-id
+        target: /var/lib/dbus/machine-id
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - type: bind
+        source: ./dev-california-runtime/home
+        target: /home/dev
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /Users/zeke/workspace
+        target: /home/dev/workspace
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /Users/zeke/Downloads
+        target: /home/dev/Downloads
+        bind:
+          create_host_path: false
+      - ./proxy/resolv-california.conf:/etc/resolv.conf:ro
+    networks:
+      private:
+        ipv4_address: 172.30.0.11
+
   tailscale:
     image: tailscale/tailscale:stable
     restart: unless-stopped
@@ -157,6 +212,20 @@ services:
     cap_add: [NET_ADMIN]
     depends_on:
       dev:
+        condition: service_started
+    entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
+    volumes:
+      - ./scripts/dev-network-init.sh:/scripts/dev-network-init.sh:ro
+
+  dev-california-network-init:
+    image: metacubex/mihomo:latest
+    network_mode: service:dev-california
+    restart: "no"
+    cap_add: [NET_ADMIN]
+    environment:
+      GATEWAY_IP: 172.30.0.4
+    depends_on:
+      dev-california:
         condition: service_started
     entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
     volumes:

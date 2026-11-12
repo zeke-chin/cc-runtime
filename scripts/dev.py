@@ -18,6 +18,9 @@ BASE = ROOT / "compose.yaml"
 OVERLAY = STATE / "compose.dependencies.json"
 WORKSPACE_TARGET = "/home/dev/workspace"
 HELPER_IMAGE = "metacubex/mihomo:latest"
+# Development machines sharing the workspace and its dependency mounts.
+# "dev" is the primary service; each machine keeps its own home, identity and cache.
+DEV_SERVICES = ("dev", "dev-california")
 
 
 def run(args, *, capture=False, input=None):
@@ -153,7 +156,12 @@ def link_target(workspace, path):
     return target.relative_to(workspace).as_posix()
 
 
-def make_plan(workspace, entries, project, architecture):
+def cache_subpath(namespace, service):
+    # Keep the primary path unchanged so the existing cache is preserved.
+    return f"{namespace}/cache" if service == "dev" else f"{namespace}/cache-{service}"
+
+
+def make_plan(workspace, entries, project, architecture, services=("dev",)):
     identity = hashlib.sha256(str(workspace.resolve()).encode()).hexdigest()[:16]
     namespace = f"linux-{architecture}/{identity}"
     mounts = []
@@ -163,34 +171,43 @@ def make_plan(workspace, entries, project, architecture):
         mounts.append({"type": "volume", "source": "dependencies",
                        "target": WORKSPACE_TARGET + "/" + entry["path"],
                        "volume": {"nocopy": True, "subpath": entry["subpath"]}})
-    cache = namespace + "/cache"
-    mounts.append({"type": "volume", "source": "dependencies",
-                   "target": "/home/dev/.cache", "volume": {"nocopy": True, "subpath": cache}})
+    caches = {service: cache_subpath(namespace, service) for service in services}
     volume = project + "_dependencies"
-    overlay = {"services": {"dev": {"volumes": mounts, "environment": {
+    overlay = {"services": {service: {"volumes": mounts + [
+        {"type": "volume", "source": "dependencies", "target": "/home/dev/.cache",
+         "volume": {"nocopy": True, "subpath": caches[service]}}], "environment": {
         "PYTHONPYCACHEPREFIX": "/home/dev/.cache/python/pycache",
-        "XDG_CACHE_HOME": "/home/dev/.cache"}}},
+        "XDG_CACHE_HOME": "/home/dev/.cache"}} for service in services},
         "volumes": {"dependencies": {"external": True, "name": volume}}}
     plan = {"workspace": str(workspace), "volume": volume, "architecture": architecture,
-            "entries": entries, "cache_subpath": cache}
+            "entries": entries, "cache_subpaths": caches}
     return overlay, plan
 
 
 def generate():
     model = json.loads(compose("config", "--format", "json", capture=True))
-    mounts = model["services"]["dev"]["volumes"]
-    workspace_mount = next(m for m in mounts if m["target"] == WORKSPACE_TARGET)
-    if workspace_mount["type"] != "bind":
-        raise ValueError("dev workspace must be a bind mount")
-    workspace = Path(workspace_mount["source"]).resolve(strict=True)
+    services = [s for s in DEV_SERVICES if s in model["services"]]
+    workspace = None
+    for service in services:
+        mount = next(m for m in model["services"][service]["volumes"]
+                     if m["target"] == WORKSPACE_TARGET)
+        if mount["type"] != "bind":
+            raise ValueError(f"{service} workspace must be a bind mount")
+        path = Path(mount["source"]).resolve(strict=True)
+        if workspace not in (None, path):
+            raise ValueError("All dev services must bind the same workspace")
+        workspace = path
     rules = json.loads((ROOT / "dependency-rules.json").read_text())
-    home_mount = next((m for m in mounts if m["target"] == "/home/dev"), None)
-    if home_mount:
+    for service in services:
+        home_mount = next((m for m in model["services"][service]["volumes"]
+                           if m["target"] == "/home/dev"), None)
+        if not home_mount:
+            continue
         if home_mount["type"] != "bind":
-            raise ValueError("dev home must be a bind mount")
+            raise ValueError(f"{service} home must be a bind mount")
         home = Path(home_mount["source"]).resolve()
         if home == workspace or home in workspace.parents:
-            raise ValueError("dev home must not contain the shared workspace")
+            raise ValueError(f"{service} home must not contain the shared workspace")
         if workspace in home.parents:
             rules["exclude_paths"].append(home.relative_to(workspace).as_posix())
     # Identity directories can be root-only on Linux and contain no project dependencies.
@@ -207,7 +224,7 @@ def generate():
     architecture = run(["docker", "info", "--format", "{{.Architecture}}"], capture=True).strip()
     if not architecture or not all(c.isalnum() or c in "_-" for c in architecture):
         raise ValueError("Unexpected Docker server architecture")
-    overlay, plan = make_plan(workspace, entries, model["name"], architecture)
+    overlay, plan = make_plan(workspace, entries, model["name"], architecture, services)
     plan["skipped_symlinks"] = symlinks
     plan["linked_dependencies"] = links
     STATE.mkdir(exist_ok=True)
@@ -251,7 +268,7 @@ def initialize(plan, uid, gid):
     volume = plan["volume"]
     # External volume intentionally survives `compose down -v`.
     run(["docker", "volume", "create", volume], capture=True)
-    paths = [entry["subpath"] for entry in plan["entries"]] + [plan["cache_subpath"]]
+    paths = [entry["subpath"] for entry in plan["entries"]] + list(plan["cache_subpaths"].values())
     script = '''set -eu
 while IFS= read -r path; do
     mkdir -p "/deps/$path"
@@ -300,10 +317,10 @@ def initialize_machine_id(model, service):
         print(f"{action} machine-id for {service}.", flush=True)
 
 
-def initialize_identity(model, image):
-    """Preserve the existing SSH identity before Compose replaces dev."""
-    initialize_machine_id(model, "dev")
-    ssh_mount = next(m for m in model["services"]["dev"]["volumes"]
+def initialize_identity(model, image, service="dev"):
+    """Preserve the existing SSH identity before Compose replaces a dev service."""
+    initialize_machine_id(model, service)
+    ssh_mount = next(m for m in model["services"][service]["volumes"]
                      if m["target"] == "/var/lib/cc-runtime/ssh")
     if ssh_mount["type"] != "bind":
         raise ValueError("SSH host keys must use a bind mount")
@@ -323,11 +340,11 @@ def initialize_identity(model, image):
                       'set -eu; for type in rsa ecdsa ed25519; do '
                       'ssh-keygen -y -f "/keys/ssh_host_${type}_key" > /dev/null; done'])
         return  # Never overwrite an established persistent identity.
-    container = compose("ps", "--all", "--quiet", "dev", capture=True).strip()
+    container = compose("ps", "--all", "--quiet", service, capture=True).strip()
     if not container:
         return  # First deployment: entrypoint generates fresh keys in the directory.
     if len(container.splitlines()) != 1:
-        raise ValueError("Expected exactly one dev container for SSH identity migration")
+        raise ValueError(f"Expected exactly one {service} container for SSH identity migration")
     mounts = json.loads(run(["docker", "inspect", "--format", "{{json .Mounts}}", container],
                             capture=True))
     old_directory = ("/var/lib/cc-runtime/ssh" if any(
@@ -353,7 +370,7 @@ done
 '''
         run(helper + ["--mount", f"type=bind,source={source},target=/source,readonly",
                       "--entrypoint", "/bin/sh", image, "-c", script])
-    print("Preserved existing dev SSH host keys in the host directory.", flush=True)
+    print(f"Preserved existing {service} SSH host keys in the host directory.", flush=True)
 
 
 # Compose subcommands that create containers and therefore need a fresh mount plan.
@@ -361,7 +378,7 @@ CREATING_SUBCOMMANDS = {"up", "create", "run"}
 
 
 def prepare(model, plan):
-    """Initialize the home, identity and dependency subpaths for the current plan."""
+    """Initialize homes, identities and dependency subpaths for the current plan."""
     image = model["services"]["dev"].get("image", model["name"] + "-dev")
     try:
         run(["docker", "image", "inspect", "--format", "{{.Id}}", image], capture=True)
@@ -372,11 +389,14 @@ def prepare(model, plan):
                image, "-c", "id -u dev; id -g dev"], capture=True).split()
     if len(ids) != 2 or not all(i.isdecimal() for i in ids):
         raise ValueError("Could not determine dev user UID/GID from the built image")
-    home_mount = next((m for m in model["services"]["dev"]["volumes"]
-                       if m["target"] == "/home/dev"), None)
-    if home_mount:
-        initialize_home(image, Path(home_mount["source"]).resolve(), *map(int, ids))
-    initialize_identity(model, image)
+    for service in DEV_SERVICES:
+        if service not in model["services"]:
+            continue
+        home_mount = next((m for m in model["services"][service]["volumes"]
+                           if m["target"] == "/home/dev"), None)
+        if home_mount:
+            initialize_home(image, Path(home_mount["source"]).resolve(), *map(int, ids))
+        initialize_identity(model, image, service)
     initialize(plan, *map(int, ids))
     print("Dependency subdirectories initialized; host dependencies were not copied.", flush=True)
 
@@ -419,7 +439,6 @@ def main():
         prepare(model, plan)
         if args.command == "up":
             compose("up", "-d", "--force-recreate", overlay=True)
-
 
 if __name__ == "__main__":
     try:

@@ -8,6 +8,7 @@ ssh-host-keys/
 dev-runtime/home/
 dev-runtime/ssh-host-keys/
 dev-runtime/machine-id
+dev-california-runtime/
 tailscale/state/
 
 
