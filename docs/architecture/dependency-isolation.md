@@ -261,12 +261,16 @@ Mutagen 在同步根被整个删除或清空时会暂停会话，而不是把删
 
 如果依赖读写速度不可接受，可以只把同步的 beta 端换成 Docker 卷，忽略名单和检查脚本不变，代价见「设计原理」中的对比。
 
+## 已定事项（2026-11-12）
+
+- 所有顶层目录都参与同步。实测 `models` 3.8 GB、`rust_work` 11 GB，其余几个不到 20 MB，体积上没有必须排除的。
+- `dev-CA` 的 `hostname` 保持 `dev-california`，它属于这台机器对外的身份。
+- 本仓库的 `.env`、`proxy/config.yaml`、`proxy/config-california.yaml` 不从副本中排除，容器里仍可按 `AGENTS.md` 的流程同时修改派生配置。代价是容器仍能读到代理配置和凭据，和现状相同。
+- `machine-id` 放在机器目录下，和 `home/` 同级。
+
 ## 待定事项
 
-- 是否所有顶层目录都参与同步。实测 `models` 3.8 GB、`rust_work` 11 GB，其余几个不到 20 MB，体积上没有必须排除的，倾向全部同步。
-- `dev-CA` 的 `hostname` 是否从 `dev-california` 改为 `dev-CA`。它属于这台机器对外的身份，默认不改。
 - 机器目录 `dev-runtimes/` 是否也移到 `~/.cc-runtime/` 下。移过去后同步根里不再有任何运行时状态，可以去掉对应的忽略条目；代价是这些状态不再和仓库放在一起。
-- 本仓库的 `.env`、`proxy/config.yaml`、`proxy/config-california.yaml` 是否也从副本中排除。排除可以恢复「容器读不到代理配置和凭据」的边界，但容器里就无法再按 `AGENTS.md` 的流程同时修改这些派生配置。
 - .NET 的 `bin`/`obj` 是否需要按项目加入忽略名单。Mac 侧目前没有这类项目的构建产物。
 
 ## 没有采用的方案
