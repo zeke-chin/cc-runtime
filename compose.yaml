@@ -42,6 +42,11 @@ services:
         target: /home/dev/workspace
         bind:
           create_host_path: false
+      - type: bind
+        source: /Users/zeke/Downloads
+        target: /home/dev/Downloads
+        bind:
+          create_host_path: false
       - ./proxy/resolv.conf:/etc/resolv.conf:ro
     networks:
       private:
