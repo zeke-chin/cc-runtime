@@ -16,6 +16,6 @@
     {"markers": ["svelte.config.*"], "directories": [".svelte-kit"]}
   ],
   "include_paths": [],
-  "exclude_paths": [],
+  "exclude_paths": ["github_work/cc-runtime/dev-runtimes"],
   "skip_directory_names": [".git", ".hg", ".svn", ".idea", ".vscode", "__pycache__", ".runtime"]
 }

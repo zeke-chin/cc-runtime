@@ -42,6 +42,29 @@ class ScannerTests(unittest.TestCase):
                 _, plan = dev.generate()
             self.assertEqual(plan["entries"], [])
 
+    def test_generate_scans_only_the_dev_service(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ws").mkdir()
+            (root / "mirror").mkdir()
+            (root / "dependency-rules.json").write_text(json.dumps(RULES))
+            (root / "ws/app").mkdir()
+            (root / "ws/app/package.json").touch()
+            model = {"name": "test", "services": {
+                "dev": {"volumes": [{"type": "bind", "source": str(root / "ws"),
+                                     "target": dev.WORKSPACE_TARGET}]},
+                "dev-CA": {"volumes": [{"type": "bind", "source": str(root / "mirror"),
+                                        "target": dev.WORKSPACE_TARGET}]}}}
+            with patch.object(dev, "ROOT", root), patch.object(dev, "STATE", root / ".runtime"), \
+                    patch.object(dev, "OVERLAY", root / ".runtime/compose.json"), \
+                    patch.object(dev, "compose", return_value=json.dumps(model)), \
+                    patch.object(dev, "run", return_value="aarch64"):
+                _, plan = dev.generate()
+            overlay = json.loads((root / ".runtime/compose.json").read_text())
+            self.assertEqual(list(overlay["services"]), ["dev"])
+            self.assertEqual(list(plan["cache_subpaths"]), ["dev"])
+            self.assertEqual([e["path"] for e in plan["entries"]], ["app/node_modules"])
+
     def test_project_detection_preserves_source_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

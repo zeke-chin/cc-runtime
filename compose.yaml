@@ -69,6 +69,8 @@ services:
     environment:
       PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
       TZ: America/Los_Angeles
+      PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
+      XDG_CACHE_HOME: /home/dev/.cache
     volumes:
       - type: bind
         source: ./dev-runtimes/dev-CA/ssh-host-keys
@@ -93,11 +95,27 @@ services:
         target: /home/dev
         bind:
           create_host_path: false
+      # Linux mirror of the Mac workspace, kept in sync by Mutagen on the Mac
+      # (scripts/workspace-sync.py). Dependencies installed here stay Linux-only.
       - type: bind
-        source: /Users/zeke/workspace
+        source: /Users/zeke/.cc-runtime/linux-workspace
         target: /home/dev/workspace
         bind:
           create_host_path: false
+      # Shared git data; .git symlinks in both trees point here (scripts/git-store.py).
+      - type: bind
+        source: /Users/zeke/.cc-runtime/git
+        target: /Users/zeke/.cc-runtime/git
+        bind:
+          create_host_path: false
+      # Static cache declaration: dev-CA is not part of the dependency scan.
+      # The subpath is the one it used as dev-california (aarch64, workspace hash).
+      - type: volume
+        source: dependencies
+        target: /home/dev/.cache
+        volume:
+          nocopy: true
+          subpath: linux-aarch64/b7bcf81f26a3f3a5/cache-dev-california
       - type: bind
         source: /Users/zeke/Downloads
         target: /home/dev/Downloads
@@ -231,6 +249,11 @@ services:
     entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
     volumes:
       - ./scripts/dev-network-init.sh:/scripts/dev-network-init.sh:ro
+
+volumes:
+  dependencies:
+    external: true
+    name: cc-runtime_dependencies
 
 networks:
   private:

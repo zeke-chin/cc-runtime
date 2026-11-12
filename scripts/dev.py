@@ -23,6 +23,9 @@ HELPER_IMAGE = "metacubex/mihomo:latest"
 DEV_SERVICES = ("dev", "dev-CA")
 # Cache subdirectory per service. dev-CA keeps the directory it had as dev-california.
 CACHE_NAMES = {"dev": "cache", "dev-CA": "cache-dev-california"}
+# Services whose dependency directories are isolated by the scan and mount plan.
+# dev-CA uses the synced Linux workspace instead and declares its cache in compose.yaml.
+SCAN_SERVICES = ("dev",)
 
 
 def run(args, *, capture=False, input=None):
@@ -188,7 +191,7 @@ def make_plan(workspace, entries, project, architecture, services=("dev",)):
 
 def generate():
     model = json.loads(compose("config", "--format", "json", capture=True))
-    services = [s for s in DEV_SERVICES if s in model["services"]]
+    services = [s for s in SCAN_SERVICES if s in model["services"]]
     workspace = None
     for service in services:
         mount = next(m for m in model["services"][service]["volumes"]
