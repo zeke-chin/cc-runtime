@@ -54,7 +54,7 @@ class ScannerTests(unittest.TestCase):
                 path = root / file
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.touch()
-            entries, _ = dev.scan(root, RULES)
+            entries, _, _ = dev.scan(root, RULES)
             paths = {entry["path"] for entry in entries}
             self.assertEqual(paths, {"js/node_modules", "rust/target", "java/target",
                                      "python/.venv", "python/.vnev", "nested/node_modules"})
@@ -69,7 +69,7 @@ class ScannerTests(unittest.TestCase):
             rules = copy.deepcopy(RULES)
             rules["exclude_paths"] = ["archive"]
             rules["include_paths"] = ["app", "app/node_modules"]
-            entries, _ = dev.scan(root, rules)
+            entries, _, _ = dev.scan(root, rules)
             self.assertEqual([entry["path"] for entry in entries], ["app"])
 
     def test_refuses_symlink_and_path_escape(self):
@@ -82,6 +82,56 @@ class ScannerTests(unittest.TestCase):
             for path in ["../outside", "/outside", "."]:
                 with self.assertRaises(ValueError):
                     dev.relative_path(path)
+
+    def test_worktree_symlink_to_isolated_dependency_needs_no_mount(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "app/.agents/wt").mkdir(parents=True)
+            (root / "app/package.json").touch()
+            (root / "app/.agents/wt/package.json").touch()
+            (root / "app/node_modules").mkdir()
+            (root / "app/.agents/wt/node_modules").symlink_to("../../node_modules")
+            entries, _, links = dev.scan(root, RULES)
+            self.assertEqual([e["path"] for e in entries], ["app/node_modules"])
+            self.assertEqual([(l["path"], l["target"]) for l in links],
+                             [("app/.agents/wt/node_modules", "app/node_modules")])
+
+    def test_symlink_to_isolated_dependency_not_yet_installed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "app/wt").mkdir(parents=True)
+            (root / "app/package.json").touch()
+            (root / "app/wt/package.json").touch()
+            # Dangling until the main checkout installs; still covered by its mount.
+            (root / "app/wt/node_modules").symlink_to("../node_modules")
+            entries, _, links = dev.scan(root, RULES)
+            self.assertEqual([e["path"] for e in entries], ["app/node_modules"])
+            self.assertEqual(len(links), 1)
+
+    def test_refuses_unsafe_dependency_symlinks(self):
+        cases = {
+            "not isolated": lambda root: (root / "shared").mkdir() or "../shared",
+            "outside": lambda root: "../../outside",
+            "absolute": lambda root: str(root / "shared"),
+        }
+        for label, target in cases.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "app").mkdir()
+                (root / "app/package.json").touch()
+                (root / "app/node_modules").symlink_to(target(root))
+                with self.assertRaisesRegex(ValueError, "symlink"):
+                    dev.scan(root, RULES)
+
+    def test_symlinked_parent_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "real").mkdir()
+            (root / "alias").symlink_to("real")
+            rules = copy.deepcopy(RULES)
+            rules["include_paths"] = ["alias/node_modules"]
+            with self.assertRaisesRegex(ValueError, "symlinked parent"):
+                dev.scan(root, rules)
 
     def test_stable_paths_and_architecture_isolation(self):
         entries = [{"path": "app/node_modules", "reason": "test"}]

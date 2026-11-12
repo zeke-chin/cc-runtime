@@ -37,26 +37,40 @@ def relative_path(value):
     return path.as_posix()
 
 
+def covered(rel, paths):
+    return any(rel == p or rel.startswith(p + "/") for p in paths)
+
+
 def scan(workspace, rules):
-    """Never follow symlinks or descend into selected dependency roots."""
+    """Never follow symlinks or descend into selected dependency roots.
+
+    A dependency directory that is a relative symlink to another dependency
+    directory inside the workspace (for example a git worktree's node_modules
+    pointing at the main checkout) needs no mount of its own: it resolves to
+    the isolated target in the container too. Any other symlink is refused.
+    """
     workspace = workspace.resolve(strict=True)
     excludes = [relative_path(p) for p in rules["exclude_paths"]]
     selected = {}
     symlinks = []
+    linked = {}  # dependency symlink -> (target, reason)
 
     def excluded(rel):
-        return any(rel == p or rel.startswith(p + "/") for p in excludes)
+        return covered(rel, excludes)
 
     def add(path, reason):
         rel = path.relative_to(workspace).as_posix()
         if excluded(rel):
             return
-        # Refuse a mount through a symlink, including any ancestor.
+        # Docker would mount through a symlink onto its target; never do that.
         part = workspace
-        for name in Path(rel).parts:
+        for name in Path(rel).parts[:-1]:
             part = part / name
             if part.is_symlink():
-                raise ValueError(f"Dependency path is a symlink; resolve or exclude it first: {rel}")
+                raise ValueError(f"Dependency path has a symlinked parent; resolve it first: {rel}")
+        if path.is_symlink():
+            linked[rel] = (link_target(workspace, path), reason)
+            return
         if path.exists() and not path.is_dir():
             raise ValueError(f"Dependency mount would cover a file: {rel}")
         selected[rel] = reason
@@ -108,7 +122,33 @@ def scan(workspace, rules):
     for rel in sorted(selected, key=lambda p: (len(PurePosixPath(p).parts), p)):
         if not any(rel.startswith(parent + "/") for parent in paths):
             paths.append(rel)
-    return [{"path": p, "reason": selected[p]} for p in sorted(paths)], sorted(symlinks)
+    links = []
+    for rel, (target, reason) in sorted(linked.items()):
+        if covered(rel, paths):
+            continue  # Inside an isolated parent; the link itself is never mounted.
+        if not covered(target, paths):
+            raise ValueError(
+                f"Dependency symlink {rel} -> {target} points at a directory that is not "
+                "isolated; its contents would be shared with the host. Make the target a "
+                "dependency directory, or replace the symlink with a real directory.")
+        links.append({"path": rel, "target": target, "reason": reason})
+    entries = [{"path": p, "reason": selected[p]} for p in sorted(paths)]
+    return entries, sorted(symlinks), links
+
+
+def link_target(workspace, path):
+    """Workspace-relative target of a dependency symlink, valid on host and in dev."""
+    rel = path.relative_to(workspace).as_posix()
+    value = os.readlink(path)
+    if os.path.isabs(value):
+        # Absolute targets name host paths that do not exist inside the container.
+        raise ValueError(f"Dependency symlink uses an absolute target; make it relative: {rel} -> {value}")
+    target = Path(os.path.normpath(path.parent / value))
+    if target != workspace and workspace not in target.parents:
+        raise ValueError(f"Dependency symlink points outside the workspace: {rel} -> {value}")
+    if target.is_symlink():
+        raise ValueError(f"Dependency symlink points at another symlink; link to the real directory: {rel} -> {value}")
+    return target.relative_to(workspace).as_posix()
 
 
 def make_plan(workspace, entries, project, architecture):
@@ -161,12 +201,13 @@ def generate():
                     raise ValueError("Identity storage must not contain the shared workspace")
                 if workspace in identity.parents:
                     rules["exclude_paths"].append(identity.relative_to(workspace).as_posix())
-    entries, symlinks = scan(workspace, rules)
+    entries, symlinks, links = scan(workspace, rules)
     architecture = run(["docker", "info", "--format", "{{.Architecture}}"], capture=True).strip()
     if not architecture or not all(c.isalnum() or c in "_-" for c in architecture):
         raise ValueError("Unexpected Docker server architecture")
     overlay, plan = make_plan(workspace, entries, model["name"], architecture)
     plan["skipped_symlinks"] = symlinks
+    plan["linked_dependencies"] = links
     STATE.mkdir(exist_ok=True)
     # Compose interpolates '$' in values, even in JSON. Escape literal path characters.
     encoded = json.dumps(overlay, ensure_ascii=False, indent=2).replace("$", "$$")
@@ -176,6 +217,8 @@ def generate():
     (STATE / "dependencies.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
     compose("config", "--quiet", overlay=True)
     print(f"Scanned {workspace}: {len(entries)} isolated directories, one volume: {plan['volume']}", flush=True)
+    if links:
+        print(f"{len(links)} dependency symlinks resolve to isolated directories; see .runtime/dependencies.json", flush=True)
     if symlinks:
         print(f"Skipped {len(symlinks)} symlink directories; see .runtime/dependencies.json", flush=True)
     return model, plan
