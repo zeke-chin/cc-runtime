@@ -28,12 +28,15 @@
 | Mutagen | Mac 上已安装 0.18.1，守护进程在运行，没有会话。`.git` 同步的初步实测已做完，临时会话和目录都已删除 |
 | Mac 编辑器 | Cursor、Zed、Xcode。Cursor 的后台 `git status` 只读（`GIT_OPTIONAL_LOCKS=0`） |
 | `/Users/zeke/.cc-runtime` | 不存在，和 workspace 在同一块磁盘上 |
-| 仓库 | 14 个文件有未提交的修改，另有 4 个未跟踪文件 |
-| 执行位置 | Docker、Homebrew、同步工具的命令都在 Mac 上执行，从 `dev` 容器经 SSH 发起。这个会话运行在 `dev` 里，所以阶段 4 的重建不能从这里发起 |
+| 仓库 | 原有改动已按用途全部提交（到 `c3d3a95`），工作区干净 |
+| 执行位置 | Docker、Homebrew、同步工具的命令都在 Mac 上执行，从 `dev` 容器经 `ssh -p 10023 zeke@172.30.0.2` 发起，Mac 上需要先 `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH`。执行落地的会话运行在 `dev` 里，所以阶段 4 的重建不能从这里发起 |
+| 容器与镜像 | 容器名 `cc-runtime-dev-1`、`cc-runtime-dev-california-1`；开发镜像 `ghcr.io/zeke-chin/cc-runtime:latest`，用户 `dev` 的 uid/gid 为 1001 |
+| 一次性测试容器 | 不经过 Compose，直接 `docker run -d --rm --network none --entrypoint sleep -u 1001:1001 -v ... <镜像> infinity`，测完 `docker rm -f` |
+| 实测中踩过的坑 | Mac 的 `/tmp` 是指向 `/private/tmp` 的链接，挂载时用 `pwd -P` 得到的真实路径；开发镜像里没有 `bc`，计时用 `date +%s%N`；virtiofs 有缓存，Mac 删除文件后容器里最长约 1 秒仍能看到它，紧接着创建同名文件可能失败 |
 
 ## 阶段 0：准备
 
-1. **提交仓库里现有的改动。** 之后每个阶段的修改各自提交，回退时用 Git 就能恢复。
+1. **提交仓库里现有的改动。** 之后每个阶段的修改各自提交，回退时用 Git 就能恢复。（已完成，2026-11-12）
 2. **确认以下决定**（括号里是默认做法，没有异议就按它执行）：
    - `machine-id` 放在机器目录下，和 `home/` 同级（是）。
    - `dev-CA` 的 `hostname` 是否从 `dev-california` 改掉（不改）。
