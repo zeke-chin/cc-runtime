@@ -113,18 +113,23 @@ def busy(gitdir, now=None):
     """Reason the git data may be in use right now, or None."""
     gitdir = Path(gitdir)
     now = now or time.time()
-    for directory, dirs, files in os.walk(gitdir):
-        if Path(directory) == gitdir / "objects":
-            # Loose objects are many; only look at in-flight transfers.
-            dirs[:] = [d for d in dirs if d == "pack" or d.startswith("incoming-")]
+    # Only where git itself takes locks. Tools keep their own long-lived files in
+    # .git (Cursor leaves .git/cursor/crepe/build.lock), which must not count.
+    for entry in os.scandir(gitdir):
+        if entry.name.endswith(".lock") and entry.is_file(follow_symlinks=False):
+            return f"lock file {entry.name}"
+    for directory, _, files in os.walk(gitdir / "refs"):
         for name in files:
             if name.endswith(".lock"):
                 return f"lock file {os.path.relpath(os.path.join(directory, name), gitdir)}"
-            if name.startswith("tmp_pack_") or name.startswith("tmp_idx_"):
-                return "a pack transfer is in progress"
-        for name in dirs:
-            if name.startswith("incoming-"):
-                return "objects are being received"
+    objects = gitdir / "objects"
+    if objects.is_dir():
+        if any(entry.name.startswith("incoming-") for entry in os.scandir(objects)):
+            return "objects are being received"
+        pack = objects / "pack"
+        if pack.is_dir() and any(entry.name.startswith(("tmp_pack_", "tmp_idx_"))
+                                 for entry in os.scandir(pack)):
+            return "a pack transfer is in progress"
     markers = [gitdir, gitdir / "index", gitdir / "HEAD", gitdir / "packed-refs",
                gitdir / "ORIG_HEAD", gitdir / "logs" / "HEAD", gitdir / "objects",
                gitdir / "objects" / "pack", gitdir / "refs" / "heads"]

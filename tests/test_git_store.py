@@ -117,6 +117,15 @@ class GitStoreTests(unittest.TestCase):
         busy = self.repo(self.mac, "busy")
         (busy / ".git/index.lock").write_text("")
         self.assertIn("lock file", store.externalize(self.layout, "busy")[1])
+        tool = self.repo(self.mac, "tool")
+        (tool / ".git/cursor/crepe").mkdir(parents=True)
+        (tool / ".git/cursor/crepe/build.lock").write_text("")  # Cursor's own file, not git's
+        age(tool / ".git")
+        self.assertTrue(store.externalize(self.layout, "tool")[0])
+        reflock = self.repo(self.mac, "reflock")
+        (reflock / ".git/refs/heads/main.lock").write_text("")
+        age(reflock / ".git")
+        self.assertIn("refs/heads/main.lock", store.externalize(self.layout, "reflock")[1])
         fresh = self.repo(self.mac, "fresh")
         (fresh / "a.txt").write_text("changed\n")
         git(fresh, "add", "a.txt")
@@ -136,7 +145,7 @@ class GitStoreTests(unittest.TestCase):
         git(sup, "commit", "-qm", "sub")
         age(sup / ".git")
         self.assertIn("submodules", store.externalize(self.layout, "sup")[1])
-        self.assertEqual(list(self.store.iterdir()), [self.store / "taken.git"])
+        self.assertEqual(sorted(self.store.iterdir()), [self.store / "taken.git", self.store / "tool.git"])
 
     def test_restore_moves_data_back_and_removes_both_links(self):
         self.repo(self.mac, "g/foo")
