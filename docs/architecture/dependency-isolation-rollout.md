@@ -1,6 +1,6 @@
 # 依赖隔离落地计划
 
-状态：执行中。阶段 0、1 已完成，阶段 1 有两项待使用者确认（2026-11-12）。设计见 [依赖隔离：两个方案](dependency-isolation.md)，本计划落地其中的方案 2。
+状态：执行中（2026-11-12）。阶段 0、1 已完成，阶段 1 有两项待使用者确认。阶段 2 因 `dev-california` 里有会话而暂停在重建之前。阶段 3 中不依赖重建的第 1 到 5 步已完成，同步会话 `linux-workspace` 已在运行，4 个试点仓库已迁出。阶段 4 交给使用者，见交接步骤。设计见 [依赖隔离：两个方案](dependency-isolation.md)，本计划落地其中的方案 2。
 
 ## 总体安排
 
@@ -25,11 +25,12 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| 容器 | `dev`、`dev-california`、两个 proxy、tailscale 都在运行 |
+| 容器 | `dev`、`dev-california`、两个 proxy、tailscale 都在运行。`dev-california` 里有一个 `herdr server` 和它的 `zsh`（容器启动后不久建立，此后没有活动），所以没有重建 |
 | Docker / Compose | 29.4.0 / 5.1.2。已验证 Compose 接受 `dev-CA` 这样含大写字母的服务名 |
 | Mutagen | Mac 上已安装 0.18.1，守护进程在运行。只有一个临时会话 `spike` |
 | Mac 编辑器 | Cursor、Zed、Xcode。Cursor 的后台 `git status` 只读（`GIT_OPTIONAL_LOCKS=0`） |
-| `/Users/zeke/.cc-runtime` | 空目录。阶段 1 的临时会话、容器和测试脚本都已删除 |
+| `/Users/zeke/.cc-runtime` | `linux-workspace/`（69 GB，会话 `linux-workspace` 在运行）和 `git/`（4 个试点仓库的 git 数据）。阶段 1 的临时内容已全部删除 |
+| 分支 | `stage2-dev-CA`（阶段 2 的改动）、`stage3-dev-CA`（在前者之上，阶段 3 的配置改动），都没有合入 `main`；它们的临时 worktree 已删除 |
 | 仓库 | 文档已更新为两个方案并提交，工作区干净 |
 | 执行位置 | Docker、Homebrew、同步工具的命令都在 Mac 上执行，从 `dev` 容器经 `ssh -p 10023 zeke@172.30.0.2` 发起，Mac 上需要先 `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH`。执行落地的会话运行在 `dev` 里，所以阶段 4 的重建不能从这里发起 |
 | 容器与镜像 | 容器名 `cc-runtime-dev-1`、`cc-runtime-dev-california-1`；开发镜像 `ghcr.io/zeke-chin/cc-runtime:latest`，用户 `dev` 的 uid/gid 为 1001 |
@@ -217,6 +218,44 @@
 依赖耗时这一项没有硬性数字，由使用者看对比结果决定能否接受。不能接受时，按设计文档把同步的 Linux 端换成 Docker 卷，重做本阶段。
 
 回退：先让会话把未同步的改动推完，用 `scripts/git-store.py restore` 恢复试点仓库，再把 `dev-CA` 的 workspace 挂载源改回 `/Users/zeke/workspace`、去掉 git 目录挂载、把它加回依赖扫描、重建容器，最后暂停会话。阶段 2 的目录和名字不用退。
+
+### 执行情况（2026-11-12）
+
+第 1 到 5 步不依赖重建，已完成；第 6、7 步和验收要等阶段 2 完成。
+
+1. **目录。** 已建 `~/.cc-runtime/linux-workspace` 和 `~/.cc-runtime/git`。前者已用 `tmutil addexclusion` 从 Time Machine 中排除，后者没有排除。**Spotlight 的排除待使用者在「系统设置 → Spotlight → 搜索隐私」里添加 `linux-workspace`。** 没有用 `.metadata_never_index`：放在 beta 根下，它会被同步到 Mac workspace 的根目录，反而关掉 workspace 的索引。
+2. **脚本。**
+   - 已提交到 `main`：`scripts/workspace-sync.py`（`create`、`status`、`ignores`、`compare`）、`scripts/git-store.py`（`status`、`externalize`、`restore`）、`scripts/check-sync-ignores.py`，以及 `tests/test_git_store.py`。
+   - 测试在 Mac 的 Python 3.9、3.14 和容器的 3.14 下都通过。
+   - 用临时目录、真实的 Mutagen 会话和一次性容器，按阶段 1 的方法把 `git-store.py` 过了一遍：1.2、1.4（包括两分钟保护期）、1.5、1.10 都符合预期。过程中发现并修复了一个误判：Cursor 会在 `.git` 里留下长期存在的 `build.lock`，锁检查改为只看 git 自己的锁文件。
+   - 检查脚本在真实 workspace 上的处理结果：
+     - 补了迁移期间的旧机器目录和 `shopify_lens_pg` 的数据库目录两类忽略，见设计文档「忽略名单」。
+     - 补了一条断言：任何容器可写挂载的 workspace 内路径都必须被忽略。
+     - 仍报出 4 个仓库把 `.pyc` 提交进了 git，**待使用者确认**是否在这些仓库里取消跟踪。它们不是试点，不影响本阶段。
+3. **试点仓库。** 选定 4 个，都不在 `dev` 和 `dev-california` 的 Claude 项目记录里，也不是任何进程的工作目录；工作区干净，不含子模块和 `worktree`，不含本仓库：
+
+   | 仓库 | 语言 | 说明 |
+   | --- | --- | --- |
+   | `github_work/CometixCode` | Rust | 唯一可用的 Rust 仓库（`jas` 在 `dev` 里用过）；远端不是使用者的，推送不在它上面测 |
+   | `github_work/fetch_tencent_docs` | Python | 约 2000 个文件；使用者自己的远端 |
+   | `github_work/posture-sentinel` | Node | 4 个本地分支，用于分支切换；使用者自己的远端 |
+   | `github_work/telegram-dl` | Node | 小仓库；使用者自己的远端 |
+
+4. **会话和首次同步。**
+   - 第一次建会话时发现，要复制的有 105 GB，其中 33 GB 是正在运行的 `shopify_lens_pg` 的 Postgres 数据目录。立即终止了会话（Linux 侧当时还是空的），补上忽略后重建。
+   - 重建后首次同步用时 301 秒，共 257,354 个文件、69 GB、929 个符号链接，没有冲突和问题。
+   - `workspace-sync.py compare`（路径、类型、大小、链接目标、可执行位）结果一致。逐文件比较内容（`compare --content`，读完 69 GB）也一致。
+   - 体积说明：其中 `github_work/shopify-lens/data/oss-history` 一个目录就有 32 GB，是未被 git 跟踪的数据。是否加忽略条目，**待使用者确认**。
+5. **迁出试点仓库。** `git-store.py externalize` 迁出了 4 个仓库，两棵树里的链接相同，Mac 侧 `status` 干净，`git-store.py status` 没有异常，会话没有冲突。在一个模拟 `dev-CA` 挂载的一次性容器里（Linux 树加同路径的 git 目录，只读、不联网），4 个仓库的顶层目录、分支、HEAD 都和 Mac 一致，工作区干净，第一次 `status` 用时 19 到 355 ms。
+
+**恢复执行**（阶段 2 完成之后，在 Mac 上）：
+
+1. 合入分支：`git merge stage3-dev-CA`。它包含 `compose.yaml`（`dev-CA` 的 workspace 挂载源、git 目录挂载、静态缓存卷）、`scripts/dev.py`（`SCAN_SERVICES = ("dev",)`）、`dependency-rules.json` 和测试。单元测试和 `docker compose config --quiet` 已通过。
+2. 第 7 步：`python3 scripts/dev.py compose up -d --no-deps --force-recreate dev-CA dev-CA-network-init`。
+3. 按验收表逐项检查。
+   - 「推送」用 `git push --dry-run`，或者推一个临时分支后立刻删除，避免在使用者的远端留下测试提交。
+   - 3 天观察期内每天运行一次 `python3 scripts/workspace-sync.py compare` 和 `python3 scripts/git-store.py status`。
+   - 重启 Mac 一项由使用者操作。
 
 ## 阶段 4：`dev` 改为 `dev-PA`，迁出全部仓库，清理旧方案
 
