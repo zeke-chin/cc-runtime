@@ -14,6 +14,12 @@ export PATH="/usr/local/go/bin:$HOME/go/bin:$HOME/.cargo/bin:$HOME/.local/bin:$P
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
+# SSH 客户端会带来自己的终端类型（如 Ghostty 的 xterm-ghostty）。容器缺少对应
+# terminfo 时，zsh 无法移动光标重绘命令行，输入会重复回显。此时回退到通用类型。
+if [[ -n $TERM ]] && ! infocmp "$TERM" &>/dev/null; then
+  export TERM=xterm-256color
+fi
+
 #
 # History
 #
