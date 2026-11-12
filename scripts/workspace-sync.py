@@ -34,6 +34,8 @@ ANCHORED_IGNORES = [
     "/github_work/cc-runtime/dev-california-runtime/",
     "/rust_work/.cache/",
     "/.pnpm-store/",
+    # Live state of other containers (writable bind mounts), found by check-sync-ignores.py.
+    "/github_work/shopify-lens/data/shopify_lens_pg_data/",
     # Virtual environments with non-standard names, found by check-sync-ignores.py.
     "/github_work/Confucius4-R2T2/.vnev/",
 ]

@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """Check the workspace sync ignore list against the real workspace.
 
-Runs on the Mac. Three checks (see docs/architecture/dependency-isolation.md):
+Runs on the Mac. Four checks (see docs/architecture/dependency-isolation.md):
   1. The two sync endpoints and the git store do not contain each other, and the
      ignore list keeps this deployment's per-machine state out of the mirror.
   2. No file tracked by git falls under the ignore list (that would be source
      that never reaches the other side).
   3. Warn about Python virtual environments (pyvenv.cfg) outside ignored
      directories: non-standard names such as .venv-mac would be synchronized.
-Exit status 1 if check 1 or 2 fails; warnings alone do not fail.
+  4. Every path inside the workspace that a container mounts writable (a
+     database directory, a service's state) is ignored. Syncing live state
+     would copy it mid-write, and a change on the Linux side would flow back
+     into it. Mounts of the whole workspace (the old layout) are not counted.
+Exit status 1 if check 1, 2 or 4 fails; warnings alone do not fail.
 
 Usage: python3 scripts/check-sync-ignores.py [--workspace DIR] [--linux DIR] [--store DIR]
 """
 import argparse
 import importlib.util
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +82,30 @@ def stray_virtualenvs(workspace):
     return found
 
 
+def container_state_mounts(workspace, inspect=None):
+    """Writable bind mounts of containers that point inside the workspace and are not ignored."""
+    if inspect is None:
+        def inspect():
+            docker = shutil.which("docker") or "/usr/local/bin/docker"
+            ids = subprocess.run([docker, "ps", "-aq"], capture_output=True, text=True, check=True).stdout.split()
+            if not ids:
+                return []
+            return json.loads(subprocess.run([docker, "inspect", *ids], capture_output=True,
+                                             text=True, check=True).stdout)
+    found = []
+    for container in inspect():
+        for mount in container.get("Mounts", []):
+            if mount.get("Type") != "bind" or not mount.get("RW"):
+                continue
+            source = Path(mount["Source"])
+            if source == workspace or workspace not in source.parents:
+                continue
+            rel = source.relative_to(workspace).as_posix()
+            if not sync.is_ignored(rel + "/"):
+                found.append((container.get("Name", "?").lstrip("/"), rel))
+    return sorted(set(found))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--workspace", default=str(sync.WORKSPACE))
@@ -92,6 +122,14 @@ def main(argv=None):
     for rel, name in violations:
         print(f"ERROR  tracked file is ignored: {rel}/{name}")
     failed |= bool(violations)
+    try:
+        mounts = container_state_mounts(workspace)
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        mounts = []
+        print(f"WARN   could not list container mounts: {error}")
+    for name, rel in mounts:
+        print(f"ERROR  container {name} mounts {rel} writable; add an ignore entry")
+    failed |= bool(mounts)
     for rel in stray_virtualenvs(workspace):
         print(f"WARN   virtual environment will be synchronized: {rel} (rename it, or add an ignore entry)")
     print("FAILED" if failed else "OK")

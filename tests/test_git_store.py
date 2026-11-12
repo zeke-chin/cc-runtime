@@ -211,5 +211,16 @@ class GitStoreTests(unittest.TestCase):
         self.assertEqual(checker.stray_virtualenvs(self.mac), ["app/.venv-old"])
 
 
+    def test_container_state_mounts(self):
+        ws = Path("/w")
+        containers = [{"Name": "/db", "Mounts": [
+            {"Type": "bind", "RW": True, "Source": "/w/app/data/pg"},
+            {"Type": "bind", "RW": False, "Source": "/w/app/schema.sql"},
+            {"Type": "bind", "RW": True, "Source": "/w/github_work/cc-runtime/tailscale/state"},
+            {"Type": "bind", "RW": True, "Source": "/w"},
+            {"Type": "volume", "RW": True, "Source": "/var/lib/docker/x"}]}]
+        self.assertEqual(checker.container_state_mounts(ws, inspect=lambda: containers),
+                         [("db", "app/data/pg")])
+
 if __name__ == "__main__":
     unittest.main()
