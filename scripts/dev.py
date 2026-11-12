@@ -20,7 +20,9 @@ WORKSPACE_TARGET = "/home/dev/workspace"
 HELPER_IMAGE = "metacubex/mihomo:latest"
 # Development machines sharing the workspace and its dependency mounts.
 # "dev" is the primary service; each machine keeps its own home, identity and cache.
-DEV_SERVICES = ("dev", "dev-california")
+DEV_SERVICES = ("dev", "dev-CA")
+# Cache subdirectory per service. dev-CA keeps the directory it had as dev-california.
+CACHE_NAMES = {"dev": "cache", "dev-CA": "cache-dev-california"}
 
 
 def run(args, *, capture=False, input=None):
@@ -157,8 +159,8 @@ def link_target(workspace, path):
 
 
 def cache_subpath(namespace, service):
-    # Keep the primary path unchanged so the existing cache is preserved.
-    return f"{namespace}/cache" if service == "dev" else f"{namespace}/cache-{service}"
+    # Existing machines keep their cache directory across service renames.
+    return f"{namespace}/{CACHE_NAMES.get(service, 'cache-' + service)}"
 
 
 def make_plan(workspace, entries, project, architecture, services=("dev",)):

@@ -143,6 +143,15 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(one["volume"], other["volume"])
 
 
+    def test_cache_subpaths_survive_service_rename(self):
+        _, plan = dev.make_plan(Path("/workspace"), [], "test", "aarch64",
+                                services=("dev", "dev-CA", "dev-XY"))
+        caches = {k: v.rsplit("/", 1)[1] for k, v in plan["cache_subpaths"].items()}
+        # dev-CA was dev-california; it must keep that cache directory.
+        self.assertEqual(caches, {"dev": "cache", "dev-CA": "cache-dev-california",
+                                  "dev-XY": "cache-dev-XY"})
+
+
 @unittest.skipUnless(os.environ.get("CC_RUNTIME_DOCKER_TEST") == "1", "opt-in Docker integration")
 class DockerTests(unittest.TestCase):
     def test_home_seed_and_nested_workspace_mount(self):

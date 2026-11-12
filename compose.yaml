@@ -54,7 +54,8 @@ services:
 
   # Second development machine; egress via proxy-california (California node).
   # Distinct identity: own home, SSH host keys, machine-id and hostname.
-  dev-california:
+  # The hostname keeps the machine's original name.
+  dev-CA:
     image: ghcr.io/zeke-chin/cc-runtime:latest
     hostname: dev-california
     entrypoint: [/bin/bash, /usr/local/bin/entrypoint.sh]
@@ -70,25 +71,25 @@ services:
       TZ: America/Los_Angeles
     volumes:
       - type: bind
-        source: ./dev-california-runtime/ssh-host-keys
+        source: ./dev-runtimes/dev-CA/ssh-host-keys
         target: /var/lib/cc-runtime/ssh
         bind:
           create_host_path: false
       - type: bind
-        source: ./dev-california-runtime/machine-id
+        source: ./dev-runtimes/dev-CA/machine-id
         target: /etc/machine-id
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ./dev-california-runtime/machine-id
+        source: ./dev-runtimes/dev-CA/machine-id
         target: /var/lib/dbus/machine-id
         read_only: true
         bind:
           create_host_path: false
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - type: bind
-        source: ./dev-california-runtime/home
+        source: ./dev-runtimes/dev-CA/home
         target: /home/dev
         bind:
           create_host_path: false
@@ -165,7 +166,7 @@ services:
       retries: 12
 
   # Second gateway whose final egress is the California node.
-  # Serves dev-california (CLIENT_IP).
+  # Serves dev-CA (CLIENT_IP).
   proxy-california:
     image: metacubex/mihomo:latest
     environment:
@@ -193,7 +194,7 @@ services:
     ports:
       - "127.0.0.1:19091:9090"
       - "127.0.0.1:17890:7890"
-      # dev-california SSH / VNC / noVNC via fixed DIRECT tunnels.
+      # dev-CA SSH / VNC / noVNC via fixed DIRECT tunnels.
       - "127.0.0.1:2223:10022"
       - "127.0.0.1:5902:15901"
       - "127.0.0.1:6081:16080"
@@ -217,15 +218,15 @@ services:
     volumes:
       - ./scripts/dev-network-init.sh:/scripts/dev-network-init.sh:ro
 
-  dev-california-network-init:
+  dev-CA-network-init:
     image: metacubex/mihomo:latest
-    network_mode: service:dev-california
+    network_mode: service:dev-CA
     restart: "no"
     cap_add: [NET_ADMIN]
     environment:
       GATEWAY_IP: 172.30.0.4
     depends_on:
-      dev-california:
+      dev-CA:
         condition: service_started
     entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
     volumes:

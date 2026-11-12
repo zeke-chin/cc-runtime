@@ -12,7 +12,7 @@ Run on the Docker host. On macOS (APFS) files are cloned copy-on-write with
 On Linux `cp --reflink=auto` is used. Hard links are never used.
 
 Usage:
-  python3 scripts/seed-dev-home.py dev-runtime/home dev-california-runtime/home
+  python3 scripts/seed-dev-home.py dev-runtime/home dev-runtimes/dev-CA/home
   python3 scripts/seed-dev-home.py --dry-run SRC DEST
   python3 scripts/seed-dev-home.py --credentials-only SRC DEST   # add to an existing home
 """

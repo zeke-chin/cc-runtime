@@ -39,7 +39,7 @@ python3 scripts/check-proxy-configs.py
 | `egress proxy` | `residential`（HTTP），`dialer-proxy: residential-upstream` | `california`（VLESS Reality + Vision），`server` 写 IP，`dialer-proxy: california-upstream` |
 | `egress groups` | `egress → residential`；`residential-upstream`：`default`（经 airport）/ `weimob`（直连） | `egress → california`；`california-upstream`：`airport`（默认）/ `DIRECT` |
 | `listeners` | 无 | `mac-mixed`：容器内 `0.0.0.0:7890`，宿主机发布为 `127.0.0.1:17890` |
-| `tunnels` | 到 Mac 的 SSH `172.30.0.2:10023`；`dev`（`172.30.0.10`）的 SSH/VNC/noVNC 入站 | 到 Mac 的 SSH `172.30.0.4:10023`；`dev-california`（`172.30.0.11`）的 SSH/VNC/noVNC 入站 |
+| `tunnels` | 到 Mac 的 SSH `172.30.0.2:10023`；`dev`（`172.30.0.10`）的 SSH/VNC/noVNC 入站 | 到 Mac 的 SSH `172.30.0.4:10023`；`dev-CA`（`172.30.0.11`）的 SSH/VNC/noVNC 入站 |
 
 ## 流量与 DNS
 
@@ -54,7 +54,7 @@ python3 scripts/check-proxy-configs.py
 ## 加州网关
 
 - 宿主机 HTTP/SOCKS 代理：`127.0.0.1:17890`；控制 API：`127.0.0.1:19091`（密钥同 `.env` 的 `PASSWORD`）。主网关 API 为 `127.0.0.1:19090`。
-- `proxy-entrypoint.sh` 通过 `GATEWAY_IP` / `CLIENT_IP` 环境变量区分网关；`CLIENT_IP: 172.30.0.11` 为 `dev-california`。入口脚本拒绝 Docker 私网访问 7890，dev 容器不能借此绕过透明网关。
+- `proxy-entrypoint.sh` 通过 `GATEWAY_IP` / `CLIENT_IP` 环境变量区分网关；`CLIENT_IP: 172.30.0.11` 为 `dev-CA`。入口脚本拒绝 Docker 私网访问 7890，dev 容器不能借此绕过透明网关。
 - 直连加州节点实测下载约 0.2–0.7 MB/s，经 airport 约 2 MB/s，因此 `california-upstream` 默认 `airport`，可在面板切到 `DIRECT`。
 - 服务端为 3x-ui + Xray 26.x。Xray 26 在 `minClientVer` 为空时默认要求客户端 ≥ v26.3.27，会拒绝 Mihomo（表现为 `REALITY authentication failed`）。服务端该 inbound 已设置 `minClientVer: 1.0.0`；重装或重建 inbound 后需重新设置。
 
