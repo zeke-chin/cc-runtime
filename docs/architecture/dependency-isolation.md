@@ -222,7 +222,7 @@ mutagen sync create --name=linux-workspace \
 
 未迁出是安全的默认状态：另一侧运行 git 会明确报「不是 git 仓库」，不会损坏数据。
 
-**迁出脚本** `scripts/git-store.py`（待写），在 Mac 上运行。两棵树和 git 目录都在同一块磁盘上，迁出是一次改名加一个链接，不复制数据。
+**迁出脚本** `scripts/git-store.py`，在 Mac 上运行。两棵树和 git 目录都在同一块磁盘上，迁出是一次改名加一个链接，不复制数据。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -230,7 +230,7 @@ mutagen sync create --name=linux-workspace \
 | `externalize <仓库>` / `--all` | 把真实的 `.git` 目录移到 git 目录下，原位换成链接。对两棵树里的仓库都适用，所以容器里新建的仓库也用它 |
 | `restore <仓库>` / `--all` | 反向操作，把 git 数据移回 Mac 树里的原位。用于回退 |
 
-`externalize` 的保护条件：仓库里有 `*.lock` 文件或 `.git` 在最近两分钟内有改动时跳过（可能正在 clone 或提交）；目标路径已存在时拒绝；含子模块（有 `.gitmodules` 或 `.git/modules/`）或 `git worktree`（`.git/worktrees/` 非空）的仓库一律跳过，不迁出，原因见「代价与已知限制」。
+`externalize` 的保护条件：git 自己的锁文件存在（`.git` 顶层和 `refs/` 下的 `*.lock`）、正在接收对象（`objects/incoming-*`、`objects/pack/tmp_*`）、`.git` 在最近两分钟内有改动、或者还没有提交时跳过（可能正在 clone 或提交）。只看 git 自己的锁，是因为编辑器会在 `.git` 里放长期存在的文件（实测 Cursor 留有 `.git/cursor/crepe/build.lock`）；目标路径已存在时拒绝；含子模块（有 `.gitmodules` 或 `.git/modules/`）或 `git worktree`（`.git/worktrees/` 非空）的仓库一律跳过，不迁出，原因见「代价与已知限制」。
 
 `status` 报告的异常：
 
@@ -258,17 +258,23 @@ mutagen sync create --name=linux-workspace \
 | 本部署的运行时状态 | `/github_work/cc-runtime/dev-runtimes/` `/github_work/cc-runtime/tailscale/state/` | 以同步根为锚的路径。家目录、SSH 主机密钥、machine-id 和 Tailscale 状态不进入副本 |
 | 平台相关的依赖和构建产物 | `node_modules` `.venv` `target` `.next` `.nuxt` `.output` `.svelte-kit` `.turbo` `.parcel-cache` `.gradle` `.dart_tool` `.angular` `.tox` `.nox` | 任意深度按名字匹配 |
 | 没有必要共享的缓存 | `__pycache__` `.pytest_cache` `.ruff_cache` `.mypy_cache` | 各自生成，同步只会增加噪音 |
+| 迁移期间的旧机器目录 | `/github_work/cc-runtime/dev-runtime/` `/github_work/cc-runtime/dev-california-runtime/` | `dev` 和 `dev-california` 在迁移完成前仍用它们，里面有家目录、凭据和 SSH 主机私钥。阶段 4 之后目录不存在，条目失效，下次重建会话时删除 |
+| 其他容器的运行时状态 | `/github_work/shopify-lens/data/shopify_lens_pg_data/` | 正在运行的 `shopify_lens_pg` 的 Postgres 数据目录（33 GB）。同步活的数据库目录会持续产生负载，并且 Linux 侧的任何改动都会流回它。检查脚本的第 4 条断言会报出新的这类挂载 |
 | 体积大的工具缓存 | `/rust_work/.cache/` `/.pnpm-store/` | 阶段 1 发现：前者 11 GB，后者 891 MB，都不是源码 |
+| 名字不标准的虚拟环境 | `.venv-mac`（按名字）`/github_work/Confucius4-R2T2/.vnev/` | 检查脚本报出 |
 
 不在名单里的：`bin`、`obj`、`build`、`dist`、`vendor`。这些名字经常就是源码目录，不能按名字全局忽略，默认照常同步；确有需要时为具体项目加带路径的条目。
 
 ### 检查脚本
 
-`scripts/check-sync-ignores.py`（待写），在 Mac 侧运行，三个断言：
+`scripts/check-sync-ignores.py`，在 Mac 侧运行，四个断言：
 
 1. **两端互不包含**：会话的两个端点路径没有包含关系，git 目录不在任何一个端点之内，并且忽略名单包含 `dev-runtimes/` 条目。
 2. **没有误伤**：任何被 git 跟踪的文件都不落在忽略名单内。被 git 跟踪的一定是源码，所以这类错误可以确定性地查出来。
 3. **没有明显遗漏**：未被忽略的目录里不应出现 `pyvenv.cfg`（即名字不标准的虚拟环境，如现有的 `.venv-mac`、`.vnev`），发现时给出警告。
+4. **不同步活的状态**：任何容器以可写方式挂载的、workspace 内的路径都必须被忽略（整个 workspace 的挂载除外）。
+
+2026-11-12 在真实 workspace 上的结果：第 1、3、4 条通过（3、4 条按上面的名单处理后）；第 2 条报出 4 个仓库（含 `old_work` 下的两份副本）把 `__pycache__/*.pyc` 提交进了 git，例如 `wm_work/wos_skills_work`、`wm_work/aisales-doc`。这些文件不会同步，迁出后容器里会显示为已删除；处理办法是在这些仓库里取消跟踪，待使用者确认。
 
 git 目录的检查由 `scripts/git-store.py status` 负责。
 
@@ -332,7 +338,7 @@ Mutagen 在同步根被整个删除时不把删除传播到另一侧，文档说
 
   小文件操作慢 6 到 10 倍。预计影响集中在冷装依赖和大项目冷启动，量级是多几秒到十几秒。真实项目上的耗时还没有测过。
 - **多一个常驻组件。** Mac 上要运行 Mutagen 守护进程（已安装）。它仍是 1.0 之前的版本。
-- **源码在 Mac 磁盘上存两份。** 三个主要目录排除依赖后约 33 万个文件。git 数据只有一份，合计约 2.5 GB。
+- **源码在 Mac 磁盘上存两份。** 2026-11-12 实测，排除忽略名单后 workspace 约 26 万个文件、105 GB；去掉 `shopify_lens_pg_data`（33 GB）后约 72 GB 要复制一份。其中 `github_work/shopify-lens/data/oss-history` 一个目录 32 GB（未被 git 跟踪的数据）。git 数据只有一份，合计约 2.5 GB。
 - **冲突需要人处理。** 同一文件在同步窗口内被两边同时修改时会被标记，不会自动合并。
 - **重命名或移动项目后，另一侧的依赖留在旧路径。** 需要在新路径重新安装，旧路径的残留要手动清理。实测：一侧删除或改名项目时，如果另一侧这个目录里有被忽略的内容，会话报冲突，另一侧整个旧目录（包括源码）都留下，删掉残留后冲突自动消失。
 - **规则没有消失。** 仍然要维护一份忽略名单，只是从「启动时按标记文件预判每个目录」变成「十几个名字持续生效，并且有脚本校验」。
@@ -366,7 +372,7 @@ Mutagen 在同步根被整个删除时不把删除传播到另一侧，文档说
 
 - 保留两个方案；本部署落地方案 2。
 - git 数据外置到 `~/.cc-runtime/git/`，两棵树用同一个链接指向它。使用者此前否决过这个做法（理由是不改动 Mac 上的仓库），在比较了「留在 Mac 原位」需要的补链接脚本和可写挂载之后改为采用。
-- 所有顶层目录都参与同步。实测 `models` 3.8 GB，其余几个不到 20 MB；`rust_work` 里只有一个 11 GB 的 `.cache`，加进忽略名单。
+- 所有顶层目录都参与同步。实测 `models` 3.8 GB，其余几个不到 20 MB；`rust_work` 里只有一个 11 GB 的 `.cache`，加进忽略名单。阶段 3 首次同步时发现，按目录量体积漏掉了 `github_work` 里的大数据目录，见「代价与已知限制」；是否为 `shopify-lens/data/oss-history` 这类数据目录加忽略条目，待使用者确认。
 - `dev-CA` 的 `hostname` 保持 `dev-california`，它属于这台机器对外的身份。
 - 本仓库的 `.env`、`proxy/config.yaml`、`proxy/config-california.yaml` 不从副本中排除，容器里仍可按 `AGENTS.md` 的流程同时修改派生配置。代价是容器仍能读到代理配置和凭据，和现状相同。
 - `machine-id` 放在机器目录下，和 `home/` 同级。

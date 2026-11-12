@@ -148,6 +148,31 @@
 
 回退：删除新容器，把目录移回原名，用 Git 恢复第 4 步的文件，按原服务名启动。
 
+### 执行情况（2026-11-12）
+
+**未执行重建，阶段 2 暂停在第 1 步之后。** 重建前检查 `dev-california`，里面有一个 `herdr server` 和它下面的一个 `zsh`（pts/0）。容器启动 12 分钟后建立，此后近 7 小时没有输入输出，也没有运行任何程序。按使用者的要求，有会话就不重建。
+
+已经完成、不依赖重建的部分：
+
+- 第 1 步的基线已记录：
+  - SSH 主机密钥指纹：RSA `SHA256:bvJndCc26+12UCmFp36USAneRnyAeSnB+X1hg5IVqWc`，ECDSA `SHA256:NrNZ2DZCrNqPjpBRLL44xQJibc3WtE+2H/FokBBDtO0`，ED25519 `SHA256:+9yrPc1a1OLd+108GcudzPzhEkz/YhOs6EhEWk9dgLA`。
+  - `machine-id`：`db417b5d9e4c42f1a318d52ebca56a68`。
+  - 出口 IP：`170.106.196.73`。
+  - 登录状态：`gh` 已登录，有 `.git-credentials`；没有 `~/.claude/.credentials.json`，`claude` 可能尚未登录，验收时按「与基线相同」判断。
+  - `~/.cache`：2 项，5.7 MB。
+  - 端口 2223、5902、6081 可连；Mac 的 `known_hosts` 里已有 `[127.0.0.1]:2223`。
+  - `dev` 的创建时间：`2026-11-04T07:33:12Z`。
+- 第 4 步的改动已提交在分支 `stage2-dev-CA`，没有合入 `main`，所以 `main` 仍和实际部署一致。单元测试通过，`docker compose config --quiet` 通过。改动包括：`compose.yaml`、`scripts/dev.py`（`CACHE_NAMES` 把 `dev-CA` 映射回 `cache-dev-california`，有测试覆盖）、`.gitignore`、`.dockerignore`、`AGENTS.md`、`README.md`、`proxy/README.md`、`scripts/seed-dev-home.py`。
+
+**恢复执行**（在 Mac 上；会话还在时，先请使用者关掉它）：
+
+1. 再查一次会话：`docker exec cc-runtime-dev-california-1 ps -eo pid,etime,tty,args`，确认没有 `herdr`、shell 或 `claude`。
+2. 停止并删除旧容器：`docker compose stop dev-california-network-init dev-california && docker compose rm -f dev-california-network-init dev-california`。
+3. 移动目录：`mkdir -p dev-runtimes && mv dev-california-runtime dev-runtimes/dev-CA`。
+4. 合入分支：`git merge stage2-dev-CA`（分支只改 `dev-california` 相关的内容，不影响运行中的 `dev`）。
+5. 启动：`python3 scripts/dev.py compose up -d --no-deps dev-CA dev-CA-network-init`。
+6. 按上面的验收逐项对照基线。
+
 ## 阶段 3：`dev-CA` 切换到同步的 workspace
 
 步骤：
@@ -195,15 +220,41 @@
 
 ## 阶段 4：`dev` 改为 `dev-PA`，迁出全部仓库，清理旧方案
 
-`dev-CA` 验收全部通过后才开始，届时再把这一节展开成详细步骤。要点：
+`dev-CA` 验收全部通过（含 3 天观察期）后才开始。执行落地的会话运行在 `dev` 里，所以本阶段**交给使用者从 Mac 的终端或 `dev-CA` 里执行**，不能从 `dev` 里发起：停止 `dev` 会终止其中所有会话，包括执行者自己。
 
-- 从 Mac 的终端或 `dev-CA` 里执行，不能从 `dev` 容器里发起，重建会终止其中所有会话。
-- 顺序：先停掉 `dev`，再迁出全部仓库（含本仓库），然后以 `dev-PA` 启动。这样没有哪个运行中的容器会看到断掉的链接。
-- 对 `dev` 重复阶段 2 和阶段 3：`dev-runtime/` → `dev-runtimes/dev-PA/`，服务名改为 `dev-PA`，workspace 挂到同一个 `linux-workspace`，并挂载 git 目录。Tailscale 按 IP `172.30.0.10` 转发，不受改名影响。
-- 按阶段 1 的结论处理含子模块和 `worktree` 的仓库。
-- 启用定时迁出（launchd），验证新 clone 的仓库在一个周期内两侧都可用，并且不会迁出正在 clone 的仓库。
-- 两台都切换后清理：`scripts/dev.py` 里的扫描和挂载计划、`dependency-rules.json`、`.runtime/` 下的生成文件、对应的测试；Mac 上由 Docker 创建的空挂载点目录（只删空目录）；旧卷里按项目划分的依赖子目录，缓存子目录保留。
-- 更新 `README.md` 和 `AGENTS.md`，把设计文档的状态改为已实施。
+### 交接步骤
+
+以下命令在 Mac 上、仓库目录 `~/workspace/github_work/cc-runtime` 里执行（`export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH`）。
+
+1. **确认前提。** `dev-CA` 阶段 3 的验收表全部通过；`python3 scripts/workspace-sync.py status` 输出 OK；`python3 scripts/git-store.py status` 没有异常。确认 `dev` 里没有要保留的会话（`docker exec cc-runtime-dev-1 ps -eo pid,etime,tty,args`），需要的工作先提交。
+2. **记录 `dev` 的基线**，方法同阶段 2 第 1 步：三种 SSH 主机密钥指纹（`dev-runtime/ssh-host-keys/*.pub`）、`machine-id`、出口 IP、`claude` 和 `gh` 的登录状态、Tailscale SSH 能否登录、`~/.cache` 的大小。
+3. **保存旧方案的挂载计划**，清理空挂载点时要用：`cp .runtime/dependencies.json ~/.cc-runtime/old-dependencies.json`。
+4. **停止并删除 `dev`**：`docker compose stop dev-network-init dev && docker compose rm -f dev-network-init dev`。不要用不带服务名的命令。
+5. **移动机器目录**：`mkdir -p dev-runtimes && mv dev-runtime dev-runtimes/dev-PA`。
+6. **迁出全部仓库**：`python3 scripts/git-store.py externalize --all`。因「两分钟内有改动」或锁文件被跳过的，两分钟后再运行一次。含子模块或 `worktree` 的 12 个仓库会被跳过并保持原样（见阶段 1 的 1.11）。完成后 `python3 scripts/git-store.py status` 应没有异常，并且本仓库显示为已迁出。
+7. **修改配置**（新分支，提交后再启动）：
+
+   | 文件 | 改动 |
+   | --- | --- |
+   | `compose.yaml` | 服务 `dev` → `dev-PA`、`dev-network-init` → `dev-PA-network-init`（含 `network_mode`、`depends_on`）；挂载源改到 `./dev-runtimes/dev-PA/`；workspace 挂载源改为 `/Users/zeke/.cc-runtime/linux-workspace`；增加 git 目录的同路径挂载；照 `dev-CA` 静态声明缓存卷，子路径为 `linux-aarch64/b7bcf81f26a3f3a5/cache`，并加上 `PYTHONPYCACHEPREFIX`、`XDG_CACHE_HOME` 两个环境变量 |
+   | `scripts/dev.py` | 删除 `scan`、`make_plan`、`generate`、`initialize`、`link_target`、`cache_subpath`、`CACHE_NAMES`、`SCAN_SERVICES` 和 `scan`/`prepare` 子命令里的扫描；`DEV_SERVICES = ("dev-PA", "dev-CA")`；`prepare` 只保留家目录、machine-id 和 SSH 主机密钥的初始化；`compose` 子命令不再拼接附加文件 |
+   | `dependency-rules.json`、`.runtime/` | 删除 |
+   | `tests/test_dependencies.py` | 删除扫描、挂载计划和卷的测试，保留家目录初始化的测试 |
+   | `scripts/workspace-sync.py` | 删除迁移期间的两条忽略（`dev-runtime/`、`dev-california-runtime/`）。忽略名单在会话创建时固定，改动要在下次重建会话时才生效；这两个目录此时已不存在，不重建会话也没有影响 |
+   | `.gitignore`、`.dockerignore` | 删除 `dev-runtime/` 相关条目，保留 `dev-runtimes/` |
+   | `README.md`、`AGENTS.md`、`proxy/README.md`、`scripts/seed-dev-home.py` | `dev` → `dev-PA`，`dev-runtime/` → `dev-runtimes/dev-PA/`；删除「单卷隔离依赖与构建产物」一节，改写为方案 2 的使用说明（同步会话、迁出、使用约定、不迁出的仓库） |
+
+   改完运行 `python3 -m unittest discover tests` 和 `docker compose config --quiet`。
+8. **启动**：`python3 scripts/dev.py compose up -d --no-deps dev-PA dev-PA-network-init`（或改造后的等价命令）。
+9. **验收 `dev-PA`**：重复阶段 2 的身份和网络验收（对照第 2 步的基线）；Tailscale SSH 能登录（按 IP `172.30.0.10` 转发，不受改名影响）；本仓库和一个已迁出的仓库里 git 正常；`claude` 能识别本仓库。
+10. **启用定时迁出**：在 `~/Library/LaunchAgents/` 下放一个 launchd 任务，每 5 分钟运行一次 `/usr/bin/python3 <仓库>/scripts/git-store.py externalize --all`，日志写到 `~/.cc-runtime/git-store.log`。验证：在一台开发机里 `git clone` 一个新仓库，一个周期加两分钟内两侧都能用 git；clone 过程中不会被迁出（有锁文件或没有提交时跳过）。
+11. **清理**：
+    - Mac 上由 Docker 创建的空挂载点目录：对第 3 步保存的计划里每个 `entries[].path`，只在目录**为空**时删除（`rmdir`，不要 `rm -rf`）。
+    - 旧卷里按项目划分的依赖子目录 `linux-aarch64/b7bcf81f26a3f3a5/projects/`；缓存子目录 `cache`、`cache-dev-california` 保留。
+    - `~/.cc-runtime/old-dependencies.json`。
+12. **收尾**：把设计文档的状态改为「已实施」，把本计划的状态改为「已完成」。
+
+回退：停止 `dev-PA`，`python3 scripts/git-store.py restore --all`，把 `dev-runtimes/dev-PA` 移回 `dev-runtime`，用 Git 恢复第 7 步的文件，按原服务名用 `scripts/dev.py` 启动（会重新扫描生成挂载计划）。旧卷在第 11 步之前一直保留，回退不丢依赖。
 
 ## 不在本次范围
 
