@@ -89,7 +89,9 @@ def session_state(name=SESSION):
     problems = sum(1 for line in lines if line.strip().lower().endswith("problems:"))
     connected = raw.count("Connected: Yes") == 2
     status = next((line for line in lines if line.startswith("Status:")), "")
-    healthy = connected and status == "Status: Watching for changes"
+    # Scanning, staging and reconciling are normal while files change; these are not.
+    bad = ("Paused", "Halted", "Connecting", "Disconnected", "rescan")
+    healthy = connected and bool(status) and not any(word in status for word in bad)
     return True, healthy, conflicts, problems, raw
 
 
@@ -178,7 +180,7 @@ def main():
         return 1
     print(raw.strip())
     if not healthy:
-        print(f"\nNOT HEALTHY: session {SESSION!r} is not connected and watching.")
+        print(f"\nNOT HEALTHY: session {SESSION!r} is paused, halted or disconnected.")
         return 1
     if conflicts or problems:
         print(f"\nATTENTION: {conflicts} conflict(s), {problems} problem section(s).")
