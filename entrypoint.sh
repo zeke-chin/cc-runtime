@@ -78,6 +78,17 @@ EOF
     sudo chown dev:dev "$README_FILE"
 fi
 
+# Machine identity normally comes from a per-machine mount. If the image left
+# /etc/machine-id empty and nothing is mounted, generate one for this container.
+# A read-only mount is never rewritten: --ensure keeps any valid existing ID.
+if ! sudo test -s /etc/machine-id; then
+    sudo dbus-uuidgen --ensure=/etc/machine-id
+fi
+if ! sudo test -e /var/lib/dbus/machine-id; then
+    sudo mkdir -p /var/lib/dbus
+    sudo ln -s /etc/machine-id /var/lib/dbus/machine-id
+fi
+
 # Keep deployment identity outside the replaceable image and user home.
 sudo bash <<'SSH_KEYS'
 set -eu

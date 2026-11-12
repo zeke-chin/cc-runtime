@@ -48,3 +48,36 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(keys[0].read_text(), "invalid key\n")
         finally:
             subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL)
+
+
+class MachineIdTests(unittest.TestCase):
+    def model(self, path):
+        return {"services": {"dev": {"volumes": [
+            {"type": "bind", "source": str(path), "target": "/etc/machine-id"}]}}}
+
+    def test_new_machine_gets_fresh_id_and_existing_id_is_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "machine-id"
+            with patch.object(dev, "compose", return_value=""):
+                dev.initialize_machine_id(self.model(path), "dev")
+                first = path.read_text()
+                self.assertRegex(first, r"^[0-9a-f]{32}\n$")
+                dev.initialize_machine_id(self.model(path), "dev")
+            self.assertEqual(path.read_text(), first)
+
+    def test_existing_container_id_is_migrated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "machine-id"
+            def fake_run(args, **_):
+                Path(args[-1]).write_text("0123456789abcdef0123456789abcdef\n")
+            with patch.object(dev, "compose", return_value="abc123\n"), \
+                    patch.object(dev, "run", side_effect=fake_run):
+                dev.initialize_machine_id(self.model(path), "dev")
+            self.assertEqual(path.read_text(), "0123456789abcdef0123456789abcdef\n")
+
+    def test_invalid_existing_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "machine-id"
+            path.write_text("")
+            with self.assertRaisesRegex(ValueError, "not a valid"):
+                dev.initialize_machine_id(self.model(path), "dev")

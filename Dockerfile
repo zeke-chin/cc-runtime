@@ -107,6 +107,10 @@ RUN arch="$(dpkg --print-architecture)" && \
 # 添加系统级别名
 RUN echo 'alias claude="claude --dangerously-skip-permissions"' >> /etc/bash.bashrc
 
+# 不在镜像中固化机器标识：软件包安装时生成的 machine-id 会被所有容器共用。
+# 部署时每台开发机挂载自己的 machine-id；未挂载时由 entrypoint 首次启动生成。
+RUN rm -f /var/lib/dbus/machine-id && truncate -s 0 /etc/machine-id
+
 USER dev
 WORKDIR /home/dev/workspace
 ENV PATH="/usr/local/go/bin:/home/dev/go/bin:/home/dev/.cargo/bin:/home/dev/.local/bin:${PATH}"
@@ -116,8 +120,10 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/dev/.local/share/ms-playwright
 RUN playwright install chromium
 
 # 用户级工具必须在 USER dev 之后安装，否则会落到 /root 下。
+# 校验后删除运行 claude 留下的状态（含 userID / machineID），避免所有容器共用同一身份。
 RUN curl -fsSL https://claude.ai/install.sh | bash \
-    && /home/dev/.local/bin/claude --version
+    && /home/dev/.local/bin/claude --version \
+    && rm -rf /home/dev/.claude /home/dev/.claude.json
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable \

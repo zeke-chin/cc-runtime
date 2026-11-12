@@ -181,7 +181,7 @@ python3 scripts/dev.py compose up -d --no-deps --force-recreate proxy
 依赖总卷的缓存子目录          → /home/dev/.cache（单独覆盖挂载）
 ```
 
-`python3 scripts/dev.py up` / `prepare` 会在第一次使用家目录时，从已经构建的开发镜像复制 `/home/dev` 中的初始工具和配置，保留文件权限和符号链接。已有同名文件不覆盖；不复制镜像中的 `workspace`、`.cache`。Claude 和 Rust 在 Dockerfile 切换到 `USER dev` 后安装，分别位于 `~/.local` 和 `~/.cargo` / `~/.rustup`。Rust 使用 minimal profile，避免可选离线文档的大小写文件名在 macOS 挂载目录发生冲突。初始化完成后写入 `.cc-runtime-home-initialized` 标记，后续启动不重复复制，也不会用新镜像覆盖用户改动。因此重建镜像不会自动升级持久化家目录中的 Claude/Rust 等工具，需要在容器里自行更新。
+`python3 scripts/dev.py up` / `prepare` 会在第一次使用家目录时，从已经构建的开发镜像复制 `/home/dev` 中的初始工具和配置，保留文件权限和符号链接。已有同名文件不覆盖；不复制镜像中的 `workspace`、`.cache`，也不复制 `.claude`、`.claude.json` 等单机运行状态（旧镜像构建时运行 `claude --version` 留下了带 `userID`/`machineID` 的文件，新镜像已在构建时删除）。Claude 和 Rust 在 Dockerfile 切换到 `USER dev` 后安装，分别位于 `~/.local` 和 `~/.cargo` / `~/.rustup`。Rust 使用 minimal profile，避免可选离线文档的大小写文件名在 macOS 挂载目录发生冲突。初始化完成后写入 `.cc-runtime-home-initialized` 标记，后续启动不重复复制，也不会用新镜像覆盖用户改动。因此重建镜像不会自动升级持久化家目录中的 Claude/Rust 等工具，需要在容器里自行更新。
 
 仓库本身位于宿主机 workspace 中，**这允许嵌套挂载，不会自动把整个 workspace 递归复制进家目录**。容器也能通过 `/home/dev/workspace/github_work/cc-runtime/dev-runtime/home` 看到家目录的底层文件；这个别名下的 `workspace` 不承载 `/home/dev/workspace` 的子挂载。扫描器会根据家目录挂载路径自动跳过它，避免将家目录中的工具、依赖和缓存当成工作项目扫描。
 

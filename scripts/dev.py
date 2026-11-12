@@ -6,9 +6,11 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import sys
 import tempfile
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".runtime"
@@ -231,7 +233,8 @@ def initialize_home(image, home, uid, gid):
 if [ ! -f /persistent-home/.cc-runtime-home-initialized ]; then
     for path in /home/dev/.[!.]* /home/dev/..?* /home/dev/*; do
         [ -e "$path" ] || [ -L "$path" ] || continue
-        case "${path##*/}" in workspace|.cache) continue ;; esac
+        # Never seed per-machine runtime state that an image may contain.
+        case "${path##*/}" in workspace|.cache|.claude|.claude.json) continue ;; esac
         cp -a -n "$path" /persistent-home/
     done
     mkdir -p /persistent-home/workspace
@@ -261,8 +264,45 @@ done
         input="\n".join(paths) + "\n")
 
 
+def initialize_machine_id(model, service):
+    """Give a dev machine its own persistent machine-id.
+
+    An existing container keeps the ID it already has (migrated from it, even if
+    stopped); a new machine gets a fresh one. Never shared between machines.
+    """
+    for mount in model["services"][service]["volumes"]:
+        if mount["target"] != "/etc/machine-id":
+            continue
+        if mount["type"] != "bind":
+            raise ValueError(f"{service} machine-id must use a bind mount")
+        path = Path(mount["source"])
+        if path.exists():
+            if not re.fullmatch(r"[0-9a-f]{32}\n?", path.read_text()):
+                raise ValueError(f"{service} machine-id is not a valid ID: {path}")
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        container = compose("ps", "--all", "--quiet", service, capture=True).strip()
+        value = None
+        if container:
+            if len(container.splitlines()) != 1:
+                raise ValueError(f"Expected exactly one {service} container for machine-id migration")
+            with tempfile.TemporaryDirectory(prefix="cc-machine-id-") as temporary:
+                copied = Path(temporary) / "machine-id"
+                # docker cp follows the file even when the target is a mount; works when stopped.
+                run(["docker", "cp", "-L", f"{container}:/etc/machine-id", str(copied)])
+                value = copied.read_text().strip()
+            if not re.fullmatch(r"[0-9a-f]{32}", value):
+                value = None  # Empty or invalid in the old container: start fresh.
+        action = "Preserved the existing" if value else "Generated a new"
+        value = value or uuid.uuid4().hex
+        path.write_text(value + "\n")
+        path.chmod(0o644)
+        print(f"{action} machine-id for {service}.", flush=True)
+
+
 def initialize_identity(model, image):
     """Preserve the existing SSH identity before Compose replaces dev."""
+    initialize_machine_id(model, "dev")
     ssh_mount = next(m for m in model["services"]["dev"]["volumes"]
                      if m["target"] == "/var/lib/cc-runtime/ssh")
     if ssh_mount["type"] != "bind":

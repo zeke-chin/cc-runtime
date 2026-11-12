@@ -18,6 +18,19 @@ services:
         target: /var/lib/cc-runtime/ssh
         bind:
           create_host_path: false
+      # Per-machine identity instead of the machine-id once baked into the image.
+      - type: bind
+        source: ./dev-runtime/machine-id
+        target: /etc/machine-id
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./dev-runtime/machine-id
+        target: /var/lib/dbus/machine-id
+        read_only: true
+        bind:
+          create_host_path: false
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - type: bind
         source: ./dev-runtime/home
