@@ -11,9 +11,13 @@ Usage:
   python3 scripts/workspace-sync.py create     # create the session (refuses if it exists)
   python3 scripts/workspace-sync.py status     # exit 1 unless the session runs without conflicts
   python3 scripts/workspace-sync.py ignores    # print the ignore list, one entry per line
+  python3 scripts/workspace-sync.py compare [--content]
+                    # compare both trees outside the ignore list (flushes the session first)
 """
 import argparse
+import filecmp
 import os
+import stat
 import shutil
 import subprocess
 import sys
@@ -89,13 +93,74 @@ def session_state(name=SESSION):
     return True, healthy, conflicts, problems, raw
 
 
+def snapshot(root):
+    """Map relative path -> (kind, size, symlink target, executable) outside the ignore list.
+
+    Real .git directories are skipped (never synchronized); .git symlinks are compared.
+    """
+    entries = {}
+    for directory, dirs, files in os.walk(root):
+        rel_dir = os.path.relpath(directory, root)
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
+        kept = []
+        for name in dirs:
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            path = os.path.join(directory, name)
+            if is_ignored(rel):
+                continue
+            if os.path.islink(path):
+                entries[rel] = ("link", 0, os.readlink(path), False)
+            elif name == ".git":
+                continue
+            else:
+                entries[rel] = ("dir", 0, None, False)
+                kept.append(name)
+        dirs[:] = kept
+        for name in files:
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            if is_ignored(rel):
+                continue
+            path = os.path.join(directory, name)
+            info = os.lstat(path)
+            if stat.S_ISLNK(info.st_mode):
+                entries[rel] = ("link", 0, os.readlink(path), False)
+            else:
+                entries[rel] = ("file", info.st_size, None, bool(info.st_mode & stat.S_IXUSR))
+    return entries
+
+
+def compare(alpha, beta, content=False):
+    """Return a list of human-readable differences between the two trees."""
+    a, b = snapshot(alpha), snapshot(beta)
+    differences = [f"only in {alpha}: {rel}" for rel in sorted(a.keys() - b.keys())]
+    differences += [f"only in {beta}: {rel}" for rel in sorted(b.keys() - a.keys())]
+    for rel in sorted(a.keys() & b.keys()):
+        if a[rel] != b[rel]:
+            differences.append(f"differs: {rel}: {a[rel]} != {b[rel]}")
+        elif content and a[rel][0] == "file" and not filecmp.cmp(
+                os.path.join(alpha, rel), os.path.join(beta, rel), shallow=False):
+            differences.append(f"content differs: {rel}")
+    return differences
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("create")
     sub.add_parser("status")
     sub.add_parser("ignores")
+    compare_parser = sub.add_parser("compare")
+    compare_parser.add_argument("--content", action="store_true", help="also compare file contents")
     args = parser.parse_args()
+    if args.command == "compare":
+        subprocess.run([mutagen(), "sync", "flush", SESSION], check=False, capture_output=True)
+        differences = compare(str(WORKSPACE), str(LINUX_WORKSPACE), args.content)
+        for line in differences[:200]:
+            print(line)
+        if len(differences) > 200:
+            print(f"... and {len(differences) - 200} more")
+        print(f"{len(differences)} difference(s)" if differences else "Trees match outside the ignore list.")
+        return 1 if differences else 0
     if args.command == "ignores":
         print("\n".join(IGNORES))
         return 0

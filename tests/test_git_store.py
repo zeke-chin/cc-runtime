@@ -222,5 +222,18 @@ class GitStoreTests(unittest.TestCase):
         self.assertEqual(checker.container_state_mounts(ws, inspect=lambda: containers),
                          [("db", "app/data/pg")])
 
+    def test_compare_trees(self):
+        for root in (self.mac, self.linux):
+            (root / "p/node_modules").mkdir(parents=True)
+            (root / "p/a.txt").write_text("same\n")
+            os.symlink("a.txt", root / "p/l")
+        (self.mac / "p/node_modules/x").write_text("mac only, ignored\n")
+        (self.mac / "p/.git").mkdir()  # a real .git directory is never synchronized
+        self.assertEqual(sync.compare(str(self.mac), str(self.linux), content=True), [])
+        (self.linux / "p/a.txt").write_text("diff\n")
+        (self.linux / "p/b.txt").write_text("b\n")
+        result = sync.compare(str(self.mac), str(self.linux), content=True)
+        self.assertEqual(result, [f"only in {self.linux}: p/b.txt", "content differs: p/a.txt"])
+
 if __name__ == "__main__":
     unittest.main()
