@@ -1,9 +1,0 @@
-# Deployment conventions
-
-- Prefer host bind mounts for persistent service state instead of Docker named volumes, so data is visible and can be backed up directly.
-- Group files by service. Keep Tailscale configuration in `tailscale/config/` and private runtime state in `tailscale/state/`. Keep the development home in `dev-runtime/home/` and SSH host keys in `dev-runtime/ssh-host-keys/`. Each development machine keeps its machine-id in its runtime directory (`dev-runtime/machine-id`, `dev-runtimes/dev-CA/machine-id`); the second machine, service `dev-CA`, uses `dev-runtimes/dev-CA/` (`home/`, `ssh-host-keys/`, `machine-id`). New machines go under `dev-runtimes/dev-{code}/`.
-- Track configuration and scripts; exclude credentials, private keys, runtime state, and user home data from Git and Docker build contexts.
-- Preserve existing SSH host keys and Tailscale state when changing images, recreating containers, or moving storage. Stop the affected service before moving live state, and verify its identity after restarting.
-- Use `scripts/dev.py` to start the deployment with its generated dependency mounts. The existing dependency/cache volume is an intentional exception to the bind-mount preference; do not migrate it without a separate request.
-- Proxy configs: change `proxy/config.example.yaml` first, then apply the same change to every derived config (`proxy/config.yaml`, `proxy/config-california.yaml`), and run `python3 scripts/check-proxy-configs.py`. Never put real credentials or node/VPS addresses in the template; see `proxy/README.md`.
-- Development machines must keep distinct machine identities: never copy SSH host keys, machine-id, telemetry IDs, `~/.claude` or `~/.claude.json` between homes. Tool credentials and SSH client keys are shared only as listed in `CREDENTIALS` in `scripts/seed-dev-home.py`; confirm with the user before adding to that list. Seed a new home only with that script.
