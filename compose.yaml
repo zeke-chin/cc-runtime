@@ -39,7 +39,7 @@ services:
         source: cache
         target: /home/dev/.cache
         volume: {nocopy: true, subpath: "${DEV_PA_CACHE:-dev-PA}"}
-      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./scripts/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./proxy/resolv.conf:/etc/resolv.conf:ro
     networks:
       private:
@@ -70,7 +70,7 @@ services:
         source: cache
         target: /home/dev/.cache
         volume: {nocopy: true, subpath: "${DEV_CA_CACHE:-dev-CA}"}
-      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./scripts/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./proxy/resolv-california.conf:/etc/resolv.conf:ro
     networks:
       private:

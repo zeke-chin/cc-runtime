@@ -83,6 +83,6 @@ flowchart LR
 
 ## 镜像
 
-开发镜像 `ghcr.io/zeke-chin/cc-runtime` 提供 linux/amd64 和 linux/arm64。GitHub Actions 在两种架构的原生 runner 上分别构建，不使用 QEMU，全部成功后合并成多架构 manifest，发布 `latest` 和 `sha-*` 标签。构建上下文只包含 `entrypoint.sh` 和 `shell/`。
+开发镜像 `ghcr.io/zeke-chin/cc-runtime` 提供 linux/amd64 和 linux/arm64。GitHub Actions 在两种架构的原生 runner 上分别构建，不使用 QEMU，全部成功后合并成多架构 manifest，发布 `latest` 和 `sha-*` 标签。构建上下文只包含 `scripts/entrypoint.sh` 和 `shell/`。
 
 网关和 `network-init` 直接使用 `metacubex/mihomo` 镜像，不另外构建。

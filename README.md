@@ -108,12 +108,12 @@
 
 ```text
 compose.yaml          服务、网络、挂载
-Dockerfile            开发镜像（构建上下文只有 entrypoint.sh 和 shell/）
-entrypoint.sh         开发机启动脚本：SSH、VNC、桌面
+Dockerfile            开发镜像（构建上下文只有 scripts/entrypoint.sh 和 shell/）
 shell/                镜像内的 shell 配置
 cmd/cc-runtime/       CLI 入口
 internal/             CLI 的各个部分（同步、git 数据、去重、定时任务、部署等）和测试
 scripts/install.sh    编译并安装 CLI
+scripts/entrypoint.sh 开发机启动脚本：SSH、VNC、桌面
 scripts/              网关和 network-init 容器内使用的脚本
 sync-ignores          同步忽略名单（所有部署共用）
 proxy/                网关配置模板、DNS 配置；实际配置不入库

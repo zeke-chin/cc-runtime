@@ -1,5 +1,5 @@
 # The image needs only these; everything else (credentials, runtime state,
 # per-machine homes) stays out of the build context.
 *
-!entrypoint.sh
+!scripts/entrypoint.sh
 !shell/

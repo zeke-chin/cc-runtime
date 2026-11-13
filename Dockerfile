@@ -130,7 +130,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     && rustc --version && cargo --version
 
 # 本地脚本放在工具安装之后，修改脚本时复用 Claude / Rust 等工具层缓存。
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY shell/ /opt/cc-runtime/
 COPY --chmod=0755 shell/setup-shell.sh /opt/cc-runtime/setup-shell.sh
 

@@ -5,7 +5,7 @@ on:
     paths:
       - Dockerfile
       - .dockerignore
-      - entrypoint.sh
+      - scripts/entrypoint.sh
       - shell/**
       - .github/workflows/publish-image.yml
   workflow_dispatch:
