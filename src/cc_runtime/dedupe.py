@@ -1,47 +1,34 @@
-#!/usr/bin/env python3
 """Share disk blocks between the Mac workspace and its Linux mirror.
 
 Mutagen writes every file it synchronizes as new data, so the two trees take
-twice the space. Once a day this script finds files that are identical on both
-sides at the same relative path and makes the Linux copy share the Mac copy's
-blocks (a filesystem clone). Contents never change; only the Linux side is
-touched. See docs/architecture/workspace-dedupe.md.
+twice the space. Files identical on both sides at the same relative path are
+made to share the Mac copy's blocks (a filesystem clone). Contents never
+change; only the Linux side is touched.
 
   macOS (APFS): clonefile() to a temporary name outside the synced trees,
                 re-check both files, then rename over the Linux copy.
   Linux (Btrfs, XFS, bcachefs, ZFS 2.2+): FIDEDUPERANGE; the kernel compares
                 the ranges under lock and shares them only if identical.
-
-Usage:
-  python3 scripts/workspace-dedupe.py run [--dry-run] [--min-size BYTES] [--quiet-hours H]
-  python3 scripts/workspace-dedupe.py install     # macOS: run daily at 04:00 (launchd)
-  python3 scripts/workspace-dedupe.py uninstall
 """
-import argparse
+from __future__ import annotations
+
 import ctypes
 import errno
 import fcntl
 import filecmp
-import importlib.util
 import json
 import os
-import plistlib
 import shutil
 import stat
 import struct
-import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable, Dict, Optional, Tuple
 
-_spec = importlib.util.spec_from_file_location(
-    "workspace_sync", Path(__file__).resolve().with_name("workspace-sync.py"))
-sync = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(sync)
+from .config import Config, IgnoreList
 
 MIB = 1 << 20
-WORKDIR = sync.LINUX_WORKSPACE.parent  # ~/.cc-runtime: same volume, outside both trees
-LABEL = "io.cc-runtime.workspace-dedupe"
 
 # Linux: _IOWR(0x94, 54, struct file_dedupe_range) with a 24-byte header.
 FIDEDUPERANGE = 0xC0189436
@@ -55,22 +42,20 @@ class Unsupported(Exception):
     pass
 
 
-def identity(st):
+def identity(st) -> tuple:
     """What must not change between checking a file and replacing it."""
     return (st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
-def state_key(alpha_st, beta_st):
+def state_key(alpha_st, beta_st) -> list:
     return [alpha_st.st_ino, alpha_st.st_size, alpha_st.st_mtime_ns,
             beta_st.st_ino, beta_st.st_size, beta_st.st_mtime_ns]
 
 
-# ---- macOS -----------------------------------------------------------------
-
 _clonefile = None
 
 
-def clonefile(src, dst):
+def clonefile(src, dst) -> None:
     global _clonefile
     if _clonefile is None:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -82,9 +67,7 @@ def clonefile(src, dst):
         raise OSError(code, os.strerror(code), str(dst))
 
 
-# ---- Linux -----------------------------------------------------------------
-
-def dedupe_range(src, dst, length):
+def dedupe_range(src, dst, length: int) -> bool:
     """Share dst's blocks with src. Return False if the contents differ."""
     with open(src, "rb") as source, open(dst, "rb+") as target:
         offset = 0
@@ -104,18 +87,16 @@ def dedupe_range(src, dst, length):
     return True
 
 
-# ---- strategies --------------------------------------------------------------
-
 class CloneReplace:
     """macOS: clone the Mac file and rename it over the Linux copy."""
     name = "clonefile"
 
-    def __init__(self, tmpdir, clone=clonefile):
+    def __init__(self, tmpdir, clone: Callable = clonefile):
         self.tmpdir = Path(tmpdir)
         self.clone = clone
         self.counter = 0
 
-    def probe(self):
+    def probe(self) -> None:
         a, b = self.tmpdir / "probe-a", self.tmpdir / "probe-b"
         for path in (a, b):
             if path.exists():
@@ -130,7 +111,7 @@ class CloneReplace:
                 if path.exists():
                     path.unlink()
 
-    def apply(self, alpha, beta, alpha_st, beta_st):
+    def apply(self, alpha, beta, alpha_st, beta_st) -> str:
         """Return 'shared', 'differs' or 'changed'."""
         if not filecmp.cmp(alpha, beta, shallow=False):
             return "differs"
@@ -138,8 +119,7 @@ class CloneReplace:
         temporary = self.tmpdir / f"{os.getpid()}-{self.counter}"
         try:
             self.clone(alpha, temporary)
-            # Keep the Linux copy's own mode and times: git in the container
-            # caches them in its index.
+            # Keep the Linux copy's own mode and times: git in the container caches them.
             os.chmod(temporary, stat.S_IMODE(beta_st.st_mode))
             os.utime(temporary, ns=(beta_st.st_atime_ns, beta_st.st_mtime_ns))
             if (identity(os.lstat(alpha)) != identity(alpha_st)
@@ -156,11 +136,11 @@ class KernelDedupe:
     """Linux: FIDEDUPERANGE; nothing is replaced, the kernel verifies contents."""
     name = "FIDEDUPERANGE"
 
-    def __init__(self, tmpdir, dedupe=dedupe_range):
+    def __init__(self, tmpdir, dedupe: Callable = dedupe_range):
         self.tmpdir = Path(tmpdir)
         self.dedupe = dedupe
 
-    def probe(self):
+    def probe(self) -> None:
         a, b = self.tmpdir / "probe-a", self.tmpdir / "probe-b"
         try:
             a.write_bytes(b"x" * 65536)
@@ -173,7 +153,7 @@ class KernelDedupe:
                 if path.exists():
                     path.unlink()
 
-    def apply(self, alpha, beta, alpha_st, beta_st):
+    def apply(self, alpha, beta, alpha_st, beta_st) -> str:
         return "shared" if self.dedupe(alpha, beta, alpha_st.st_size) else "differs"
 
 
@@ -185,30 +165,28 @@ def default_strategy(tmpdir):
     raise Unsupported(f"unsupported platform: {sys.platform}")
 
 
-# ---- selection ----------------------------------------------------------------
-
-def candidates(beta_root):
+def candidates(beta_root, ignores: IgnoreList):
     """Relative paths of regular files in the Linux tree outside the ignore list."""
     for directory, dirs, files in os.walk(beta_root):
         rel_dir = os.path.relpath(directory, beta_root)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
         dirs[:] = [d for d in dirs if d != ".git"
-                   and not sync.is_ignored(f"{rel_dir}/{d}" if rel_dir else d)]
+                   and not ignores.matches(f"{rel_dir}/{d}" if rel_dir else d)]
         for name in files:
             rel = f"{rel_dir}/{name}" if rel_dir else name
-            if name != ".git" and not sync.is_ignored(rel):
+            if name != ".git" and not ignores.matches(rel):
                 yield rel
 
 
-def deduplicate(alpha_root, beta_root, strategy, state, *, min_size=MIB,
-                quiet_seconds=24 * 3600, dry_run=False, now=None, log=print):
-    """Return (stats, new_state)."""
+def deduplicate(alpha_root, beta_root, strategy, state: Dict[str, list], ignores: IgnoreList, *,
+                min_size: int = MIB, quiet_seconds: float = 24 * 3600, dry_run: bool = False,
+                now: Optional[float] = None, log: Callable = print) -> Tuple[dict, Dict[str, list]]:
     now = now if now is not None else time.time()
     stats = {"examined": 0, "shared": 0, "shared_bytes": 0, "already": 0, "already_bytes": 0,
              "small": 0, "missing": 0, "size_differs": 0, "recent": 0, "differs": 0,
              "changed": 0, "errors": 0, "would_share": 0, "would_share_bytes": 0}
-    new_state = {}
-    for rel in candidates(beta_root):
+    new_state: Dict[str, list] = {}
+    for rel in candidates(beta_root, ignores):
         alpha, beta = os.path.join(alpha_root, rel), os.path.join(beta_root, rel)
         try:
             beta_st = os.lstat(beta)
@@ -254,9 +232,7 @@ def deduplicate(alpha_root, beta_root, strategy, state, *, min_size=MIB,
     return stats, new_state
 
 
-# ---- state, lock, log -----------------------------------------------------------
-
-def load_state(path):
+def load_state(path: Path) -> Dict[str, list]:
     try:
         data = json.loads(Path(path).read_text())
         return data if isinstance(data, dict) else {}
@@ -264,127 +240,37 @@ def load_state(path):
         return {}  # missing or damaged: everything is compared again
 
 
-def save_state(path, state):
+def save_state(path: Path, state: Dict[str, list]) -> None:
     path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(state, separators=(",", ":")))
     temporary.replace(path)
 
 
-def check_layout(alpha_root, beta_root, workdir):
-    devices = {os.stat(p).st_dev for p in (alpha_root, beta_root, workdir)}
-    if len(devices) != 1:
-        raise Unsupported("the two trees and the work directory must be on the same filesystem")
-
-
-def session_ok():
-    exists, healthy, conflicts, problems, _ = sync.session_state()
-    if not exists:
-        return "the sync session does not exist or the Mutagen daemon is not running"
-    if not healthy:
-        return "the sync session is paused, halted or disconnected"
-    if conflicts or problems:
-        return f"the sync session has {conflicts} conflict(s) and {problems} problem section(s)"
-    return None
-
-
-def run(args):
-    alpha, beta, workdir = Path(args.alpha), Path(args.beta), Path(args.workdir)
+def run(cfg: Config, *, dry_run: bool = False, min_size: int = MIB, quiet_hours: float = 24,
+        alpha: Optional[Path] = None, beta: Optional[Path] = None, strategy=None,
+        log: Callable = print) -> dict:
+    """Deduplicate once and return the statistics. Raises Unsupported."""
+    alpha = Path(alpha or cfg.workspace)
+    beta = Path(beta or cfg.linux_workspace)
     for path in (alpha, beta):
         if not path.is_dir():
-            raise SystemExit(f"Error: {path} does not exist")
-    tmpdir = workdir / "dedupe-tmp"
+            raise Unsupported(f"{path} does not exist")
+    tmpdir = cfg.tmp_dir / "dedupe"
     tmpdir.mkdir(parents=True, exist_ok=True)
-    check_layout(alpha, beta, workdir)
-    with open(workdir / "dedupe.lock", "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise SystemExit("Error: another dedupe run is in progress") from None
-        if not args.skip_session_check:
-            problem = session_ok()
-            if problem:
-                print(f"Not deduplicating: {problem}.")
-                return 2
-        strategy = default_strategy(tmpdir)
-        strategy.probe()
-        state_path = workdir / "dedupe-state.json"
-        free_before = shutil.disk_usage(beta).free
-        started = time.time()
-        stats, new_state = deduplicate(
-            alpha, beta, strategy, load_state(state_path), min_size=args.min_size,
-            quiet_seconds=args.quiet_hours * 3600, dry_run=args.dry_run)
-        if not args.dry_run:
-            save_state(state_path, new_state)
-        stats.update(method=strategy.name, dry_run=args.dry_run,
-                     seconds=round(time.time() - started, 1),
-                     free_gained_bytes=shutil.disk_usage(beta).free - free_before)
-    line = time.strftime("%Y-%m-%dT%H:%M:%S") + " " + json.dumps(stats, ensure_ascii=False)
-    with open(workdir / "dedupe.log", "a") as log:
-        log.write(line + "\n")
-    print(line)
-    return 1 if stats["errors"] else 0
-
-
-# ---- schedule (macOS) -----------------------------------------------------------
-
-def plist_path():
-    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
-
-
-def install(args):
-    if sys.platform != "darwin":
-        raise SystemExit("Error: install sets up launchd and is macOS only; on Linux use a systemd timer")
-    path = plist_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    WORKDIR.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(plistlib.dumps({
-        "Label": LABEL,
-        "ProgramArguments": ["/usr/bin/python3", str(Path(__file__).resolve()), "run"],
-        "StartCalendarInterval": {"Hour": args.hour, "Minute": 0},
-        "StandardOutPath": str(WORKDIR / "dedupe.launchd.log"),
-        "StandardErrorPath": str(WORKDIR / "dedupe.launchd.log"),
-        "LowPriorityIO": True,
-        "Nice": 10,
-    }))
-    domain = f"gui/{os.getuid()}"
-    subprocess.run(["launchctl", "bootout", domain, str(path)], capture_output=True)
-    subprocess.run(["launchctl", "bootstrap", domain, str(path)], check=True)
-    print(f"Installed {path}: runs daily at {args.hour:02d}:00.")
-    return 0
-
-
-def uninstall(args):
-    path = plist_path()
-    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)], capture_output=True)
-    if path.exists():
-        path.unlink()
-    print(f"Removed {path}.")
-    return 0
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = parser.add_subparsers(dest="command", required=True)
-    run_parser = sub.add_parser("run")
-    run_parser.add_argument("--dry-run", action="store_true", help="report what would be shared")
-    run_parser.add_argument("--min-size", type=int, default=MIB, help="skip smaller files (bytes)")
-    run_parser.add_argument("--quiet-hours", type=float, default=24,
-                            help="skip files changed on either side more recently")
-    run_parser.add_argument("--alpha", default=str(sync.WORKSPACE))
-    run_parser.add_argument("--beta", default=str(sync.LINUX_WORKSPACE))
-    run_parser.add_argument("--workdir", default=str(WORKDIR))
-    run_parser.add_argument("--skip-session-check", action="store_true", help=argparse.SUPPRESS)
-    install_parser = sub.add_parser("install")
-    install_parser.add_argument("--hour", type=int, default=4)
-    sub.add_parser("uninstall")
-    args = parser.parse_args(argv)
-    try:
-        return {"run": run, "install": install, "uninstall": uninstall}[args.command](args)
-    except Unsupported as error:
-        print(f"Error: {error}", file=sys.stderr)
-        return 3
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    if len({os.stat(p).st_dev for p in (alpha, beta, tmpdir)}) != 1:
+        raise Unsupported("the two trees and the runtime directory must be on the same filesystem")
+    strategy = strategy or default_strategy(tmpdir)
+    strategy.probe()
+    state_path = cfg.state_dir / "dedupe.json"
+    free_before = shutil.disk_usage(beta).free
+    started = time.time()
+    stats, new_state = deduplicate(alpha, beta, strategy, load_state(state_path), cfg.ignores(),
+                                   min_size=min_size, quiet_seconds=quiet_hours * 3600,
+                                   dry_run=dry_run, log=log)
+    if not dry_run:
+        save_state(state_path, new_state)
+    stats.update(method=strategy.name, dry_run=dry_run, seconds=round(time.time() - started, 1),
+                 free_gained_bytes=shutil.disk_usage(beta).free - free_before)
+    return stats

@@ -1,30 +1,16 @@
-"""workspace-dedupe.py: file selection, safety checks and the Linux kernel path."""
-import importlib.util
-import io
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout, redirect_stderr
-from unittest.mock import patch
+from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("workspace_dedupe", ROOT / "scripts/workspace-dedupe.py")
-dedupe = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(dedupe)
+from helpers import DAY, MIB, make_config, write
 
-MIB = 1 << 20
-DAY = 24 * 3600
+from cc_runtime import config, dedupe
 
-
-def write(path, data, age=2 * DAY):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    past = time.time() - age
-    os.utime(path, (past, past))
+IGNORES = config.IgnoreList(config.NAME_IGNORES)
 
 
 class CopyStrategy(dedupe.CloneReplace):
@@ -52,7 +38,8 @@ class SelectionTests(unittest.TestCase):
     def run_once(self, state=None, **kwargs):
         # ctime cannot be set back; treat it as current unless a test needs otherwise.
         kwargs.setdefault("quiet_seconds", 0)
-        return dedupe.deduplicate(self.a, self.b, self.strategy, state or {}, log=lambda *_: None, **kwargs)
+        return dedupe.deduplicate(self.a, self.b, self.strategy, state or {}, IGNORES,
+                                  log=lambda *_: None, **kwargs)
 
     def test_selects_only_eligible_pairs(self):
         big = os.urandom(2 * MIB)
@@ -71,7 +58,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_recently_changed_files_wait(self):
         self.both("p/data.bin", os.urandom(2 * MIB))
-        stats, state = self.run_once(quiet_seconds=DAY)  # ctime is now: too recent
+        stats, _ = self.run_once(quiet_seconds=DAY)  # ctime is now: too recent
         self.assertEqual((stats["recent"], stats["shared"]), (1, 0))
         stats, _ = self.run_once(quiet_seconds=DAY, now=time.time() + 2 * DAY)
         self.assertEqual(stats["shared"], 1)
@@ -121,6 +108,32 @@ class SelectionTests(unittest.TestCase):
         self.both("p/.git/objects/pack/big.pack", os.urandom(2 * MIB))
         stats, _ = self.run_once()
         self.assertEqual(stats["examined"], 0)
+
+
+class RunTests(unittest.TestCase):
+    def test_unsupported_filesystem_changes_nothing(self):
+        class NoClones(CopyStrategy):
+            def probe(self):  # what ext4 or NTFS report
+                raise dedupe.Unsupported("cannot clone files: Operation not supported")
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = make_config(Path(temporary))
+            write(cfg.workspace / "x.bin", b"x" * 2 * MIB)
+            write(cfg.linux_workspace / "x.bin", b"x" * 2 * MIB)
+            inode = os.stat(cfg.linux_workspace / "x.bin").st_ino
+            with self.assertRaises(dedupe.Unsupported):
+                dedupe.run(cfg, strategy=NoClones(cfg.tmp_dir))
+            self.assertEqual(os.stat(cfg.linux_workspace / "x.bin").st_ino, inode)
+            self.assertFalse((cfg.state_dir / "dedupe.json").exists())
+
+    def test_run_records_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cfg = make_config(Path(temporary))
+            data = os.urandom(2 * MIB)
+            write(cfg.workspace / "d.bin", data)
+            write(cfg.linux_workspace / "d.bin", data)
+            stats = dedupe.run(cfg, quiet_hours=0, strategy=CopyStrategy(cfg.tmp_dir / "dedupe"))
+            self.assertEqual(stats["shared"], 1)
+            self.assertIn("d.bin", dedupe.load_state(cfg.state_dir / "dedupe.json"))
 
 
 def dedupe_capable_dir():
@@ -187,7 +200,7 @@ class CloneFileTests(unittest.TestCase):
             before = os.stat(base / "linux/d.bin")
             strategy = dedupe.CloneReplace(base / "work")
             strategy.probe()
-            stats, _ = dedupe.deduplicate(base / "mac", base / "linux", strategy, {},
+            stats, _ = dedupe.deduplicate(base / "mac", base / "linux", strategy, {}, IGNORES,
                                           quiet_seconds=0, log=lambda *_: None)
             after = os.stat(base / "linux/d.bin")
             self.assertEqual(stats["shared"], 1)
@@ -195,28 +208,6 @@ class CloneFileTests(unittest.TestCase):
             self.assertEqual((after.st_mode & 0o777, after.st_mtime_ns), (0o640, before.st_mtime_ns))
             self.assertEqual((base / "linux/d.bin").read_bytes(), data)
             self.assertEqual(list((base / "work").iterdir()), [])
-
-class CommandTests(unittest.TestCase):
-    def test_unsupported_filesystem_exits_without_changes(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary)
-            for name in ("mac", "linux", "work"):
-                (base / name).mkdir()
-            write(base / "mac/x.bin", b"x" * 2 * MIB)
-            write(base / "linux/x.bin", b"x" * 2 * MIB)
-            inode = os.stat(base / "linux/x.bin").st_ino
-
-            class NoClones(CopyStrategy):
-                def probe(self):  # what ext4 or NTFS report
-                    raise dedupe.Unsupported("cannot clone files: Operation not supported")
-            err = io.StringIO()
-            with patch.object(dedupe, "default_strategy", NoClones), \
-                    redirect_stdout(io.StringIO()), redirect_stderr(err):
-                code = dedupe.main(["run", "--alpha", str(base / "mac"), "--beta", str(base / "linux"),
-                                    "--workdir", str(base / "work"), "--skip-session-check"])
-            self.assertEqual(code, 3)
-            self.assertIn("Error:", err.getvalue())
-            self.assertEqual(os.stat(base / "linux/x.bin").st_ino, inode)
 
 
 if __name__ == "__main__":

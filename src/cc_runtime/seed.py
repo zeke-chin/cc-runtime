@@ -1,27 +1,24 @@
-#!/usr/bin/env python3
-"""Seed a new dev machine's home from an existing one, without its identity.
+"""Seed a new development machine's home from an existing one, without its identity.
 
-Copies tools, toolchains, package caches, shell/editor configuration and the
-tool credentials the user chose to share (CREDENTIALS).
-Never copies machine identity: SSH host keys, machine-id, telemetry IDs, the
-whole ~/.claude directory and ~/.claude.json, shell/editor history or session
-state. The new machine gets its own SSH host keys, machine-id and Claude login.
+Copies tools, toolchains, package caches, shell and editor configuration, and
+the tool credentials the user chose to share (CREDENTIALS). Never copies
+machine identity: SSH host keys, machine-id, telemetry IDs, the whole ~/.claude
+directory and ~/.claude.json, history or session state. The new machine gets
+its own SSH host keys, machine-id and Claude login.
 
-Run on the Docker host. On macOS (APFS) files are cloned copy-on-write with
+Runs on the Docker host. On macOS (APFS) files are cloned copy-on-write with
 `cp -c`: instant, no extra disk space, and each side changes independently.
 On Linux `cp --reflink=auto` is used. Hard links are never used.
-
-Usage:
-  python3 scripts/seed-dev-home.py dev-runtime/home dev-runtimes/dev-CA/home
-  python3 scripts/seed-dev-home.py --dry-run SRC DEST
-  python3 scripts/seed-dev-home.py --credentials-only SRC DEST   # add to an existing home
 """
-import argparse
+from __future__ import annotations
+
 import platform
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+from typing import Callable
+
+from .util import CommandError
 
 # Paths relative to the home directory. Missing paths are skipped.
 COPY = [
@@ -87,54 +84,39 @@ def clone(source, destination):
     subprocess.run(command, check=True)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("source", type=Path)
-    parser.add_argument("destination", type=Path)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--credentials-only", action="store_true",
-                        help="Copy only CREDENTIALS into an existing home, never overwriting")
-    args = parser.parse_args()
-    source, destination = args.source.resolve(strict=True), args.destination.resolve()
+def seed(source: Path, destination: Path, *, dry_run: bool = False,
+         credentials_only: bool = False, out: Callable = print) -> None:
+    source, destination = source.resolve(strict=True), destination.resolve()
     if destination == source or source in destination.parents:
-        raise ValueError("Destination must be outside the source home")
-    if args.credentials_only:
+        raise CommandError("the destination must be outside the source home")
+    if credentials_only:
         if not destination.is_dir():
-            raise ValueError(f"Destination home does not exist: {destination}")
+            raise CommandError(f"destination home does not exist: {destination}")
         paths = CREDENTIALS
     else:
         if destination.exists() and any(destination.iterdir()):
-            raise ValueError(f"Destination is not empty: {destination}; refusing to merge homes")
+            raise CommandError(f"destination is not empty: {destination}; refusing to merge homes")
         paths = COPY + claude_current_version(source) + CREDENTIALS
     for rel in paths:
         if not (source / rel).exists() and not (source / rel).is_symlink():
-            print(f"skip   {rel} (missing)")
+            out(f"skip   {rel} (missing)")
             continue
         if (destination / rel).exists() or (destination / rel).is_symlink():
-            print(f"keep   {rel} (already exists)")
+            out(f"keep   {rel} (already exists)")
             continue
-        print(f"copy   {rel}")
-        if not args.dry_run:
+        out(f"copy   {rel}")
+        if not dry_run:
             clone(source / rel, destination / rel)
     for rel in EXCLUDE:
         path = destination / rel
         if path.exists() or path.is_symlink():
-            print(f"remove {rel}")
-            if not args.dry_run:
+            out(f"remove {rel}")
+            if not dry_run:
                 shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
-    print("\nNot copied (machine identity, history or state):")
+    out("\nNot copied (machine identity, history or state):")
     for rel, reason in NOT_COPIED.items():
-        print(f"  {rel}: {reason}")
-    if not args.dry_run:
+        out(f"  {rel}: {reason}")
+    if not dry_run:
         destination.chmod(0o755)
         if (destination / ".ssh").exists():
             (destination / ".ssh").chmod(0o700)
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        print(f"Error: {error}", file=sys.stderr)
-        sys.exit(1)
