@@ -9,27 +9,30 @@ VNC_DISPLAY_PORT=${VNC_DISPLAY_PORT:-5901}
 echo "dev:$USER_PASSWORD" | sudo chpasswd
 echo "✅ User 'dev' password set."
 
-# 工作区挂在和 Mac 相同的路径（compose 传入 WORKSPACE_DIR），git 记下的路径在
-# 两侧通用。~/workspace 和 /workspace 是指向它的链接。
-WORKSPACE_DIR=${WORKSPACE_DIR:-/home/dev/workspace}
-HOME_WORKSPACE=/home/dev/workspace
-if [ ! -d "$WORKSPACE_DIR" ]; then
-    echo "📂 Creating workspace directory $WORKSPACE_DIR..."
-    sudo mkdir -p "$WORKSPACE_DIR"
-    sudo chown dev:dev "$WORKSPACE_DIR"
-fi
-if [ "$WORKSPACE_DIR" != "$HOME_WORKSPACE" ]; then
+# 工作区和下载目录挂在和 Mac 相同的路径（compose 传入 WORKSPACE_DIR、
+# DOWNLOADS_DIR），路径两侧通用。家目录里的同名入口换成指向它们的链接。
+link_home_dir() {
+    local target=$1 home_path=$2
+    if [ ! -d "$target" ]; then
+        echo "📂 Creating directory $target..."
+        sudo mkdir -p "$target"
+        sudo chown dev:dev "$target"
+    fi
+    [ "$target" = "$home_path" ] && return 0
     # 以前的挂载点在持久家目录里留下一个空目录；换成链接。不空就不动。
-    if [ -d "$HOME_WORKSPACE" ] && [ ! -L "$HOME_WORKSPACE" ]; then
-        rmdir "$HOME_WORKSPACE" 2>/dev/null || echo "⚠️  $HOME_WORKSPACE is not empty; leaving it in place."
+    if [ -d "$home_path" ] && [ ! -L "$home_path" ]; then
+        rmdir "$home_path" 2>/dev/null || echo "⚠️  $home_path is not empty; leaving it in place."
     fi
-    if [ ! -e "$HOME_WORKSPACE" ] && [ ! -L "$HOME_WORKSPACE" ]; then
-        echo "🔗 Creating symlink $HOME_WORKSPACE -> $WORKSPACE_DIR..."
-        ln -s "$WORKSPACE_DIR" "$HOME_WORKSPACE"
+    if [ ! -e "$home_path" ] && [ ! -L "$home_path" ]; then
+        echo "🔗 Creating symlink $home_path -> $target..."
+        ln -s "$target" "$home_path"
     fi
-    # 当前目录（镜像的 WORKDIR）可能正是刚换掉的目录；重新进入，后面的进程才取得到它。
-    cd "$HOME_WORKSPACE" 2>/dev/null || cd /home/dev
-fi
+}
+WORKSPACE_DIR=${WORKSPACE_DIR:-/home/dev/workspace}
+link_home_dir "$WORKSPACE_DIR" /home/dev/workspace
+link_home_dir "${DOWNLOADS_DIR:-/home/dev/Downloads}" /home/dev/Downloads
+# 当前目录（镜像的 WORKDIR）可能正是刚换掉的目录；重新进入，后面的进程才取得到它。
+cd /home/dev/workspace 2>/dev/null || cd /home/dev
 
 if [ ! -e "/workspace" ] && [ ! -L "/workspace" ]; then
     echo "🔗 Creating symlink /workspace -> $WORKSPACE_DIR..."
@@ -87,6 +90,7 @@ if [ ! -f "$README_FILE" ]; then
 - `/home/dev`：您的主目录。
 - 工作区：挂在和 Mac 工作区相同的路径上，与 Mac 双向同步。
 - `/home/dev/workspace`、`/workspace`：指向工作区的符号链接。
+- 下载目录：挂在和 Mac 相同的路径上，`/home/dev/Downloads` 是指向它的符号链接。
 
 祝你编码愉快！
 EOF

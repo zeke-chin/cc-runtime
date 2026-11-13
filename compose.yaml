@@ -29,6 +29,7 @@ services:
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
       WORKSPACE_DIR: ${WORKSPACE_DIR}
+      DOWNLOADS_DIR: ${DOWNLOADS_DIR}
     volumes:
       - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
       - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/machine-id, target: /etc/machine-id, read_only: true}
@@ -38,7 +39,7 @@ services:
       # submodules) resolve on both sides. ~/workspace is a link to it.
       - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: "${WORKSPACE_DIR:?Set WORKSPACE_DIR in .env}"}
       - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
-      - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
+      - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: "${DOWNLOADS_DIR}"}
       - type: volume
         source: cache
         target: /home/dev/.cache
@@ -62,6 +63,7 @@ services:
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
       WORKSPACE_DIR: ${WORKSPACE_DIR}
+      DOWNLOADS_DIR: ${DOWNLOADS_DIR}
     volumes:
       - {<<: *bind, source: ./dev-runtimes/dev-california/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
       - {<<: *bind, source: ./dev-runtimes/dev-california/machine-id, target: /etc/machine-id, read_only: true}
@@ -71,7 +73,7 @@ services:
       # submodules) resolve on both sides. ~/workspace is a link to it.
       - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: "${WORKSPACE_DIR:?Set WORKSPACE_DIR in .env}"}
       - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
-      - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
+      - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: "${DOWNLOADS_DIR}"}
       - type: volume
         source: cache
         target: /home/dev/.cache
