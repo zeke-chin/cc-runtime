@@ -136,7 +136,9 @@ type Config struct {
 	Workspace string
 	Runtime   string
 	Downloads string
-	Env       map[string]string
+	// Screenshots 是可选的宿主机截图目录（HOST_SCREENSHOTS_PATH），未配置时为空。
+	Screenshots string
+	Env         map[string]string
 }
 
 func (c Config) LinuxWorkspace() string { return filepath.Join(c.Runtime, "linux-workspace") }
@@ -221,7 +223,7 @@ func Load(root string, environ map[string]string) Config {
 		}
 	}
 	values := ReadEnvFile(filepath.Join(root, ".env"))
-	for _, key := range []string{"WORKSPACE_DIR", "RUNTIME_DIR", "DOWNLOADS_DIR"} {
+	for _, key := range []string{"WORKSPACE_DIR", "RUNTIME_DIR", "DOWNLOADS_DIR", "HOST_SCREENSHOTS_PATH"} {
 		if value, ok := environ[key]; ok {
 			values[key] = value
 		}
@@ -232,11 +234,15 @@ func Load(root string, environ map[string]string) Config {
 		}
 		return ExpandPath(fallback)
 	}
-	return Config{
+	cfg := Config{
 		Root:      root,
 		Workspace: get("WORKSPACE_DIR", "~/workspace"),
 		Runtime:   get("RUNTIME_DIR", "~/.cc-runtime"),
 		Downloads: get("DOWNLOADS_DIR", "~/Downloads"),
 		Env:       values,
 	}
+	if value := strings.TrimSpace(values["HOST_SCREENSHOTS_PATH"]); value != "" {
+		cfg.Screenshots = ExpandPath(value)
+	}
+	return cfg
 }

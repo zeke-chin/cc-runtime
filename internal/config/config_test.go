@@ -26,6 +26,22 @@ func TestEnvFileAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestScreenshotsIsOptional(t *testing.T) {
+	root := t.TempDir()
+	if got := config.Load(root, map[string]string{}).Screenshots; got != "" {
+		t.Fatalf("未配置时得到 %q", got)
+	}
+	os.WriteFile(filepath.Join(root, ".env"), []byte("HOST_SCREENSHOTS_PATH=  \n"), 0o644)
+	if got := config.Load(root, map[string]string{}).Screenshots; got != "" {
+		t.Fatalf("空值得到 %q", got)
+	}
+	home, _ := os.UserHomeDir()
+	got := config.Load(root, map[string]string{"HOST_SCREENSHOTS_PATH": "~/Pictures/shots"}).Screenshots
+	if got != filepath.Join(home, "Pictures/shots") {
+		t.Fatal(got)
+	}
+}
+
 func TestIgnoreListComposition(t *testing.T) {
 	base := t.TempDir()
 	repo := filepath.Join(base, "mac", "github_work", "cc-runtime")

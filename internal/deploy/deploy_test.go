@@ -198,3 +198,89 @@ RUN mkdir -p /home/dev/.local/bin /home/dev/.cache /home/dev/workspace && \
 		t.Fatal("第二次初始化覆盖了使用者的文件")
 	}
 }
+
+func TestScreenshotsMount(t *testing.T) {
+	base := t.TempDir()
+	cfg := testutil.MakeConfig(t, base, "")
+	shots := filepath.Join(base, "shots")
+	inDownloads := filepath.Join(cfg.Downloads, "shots")
+	for _, dir := range []string{shots, inDownloads} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	real, _ := filepath.EvalSymlinks(shots)
+	cases := []struct {
+		name, path, want string
+		fails            bool
+	}{
+		{"未配置", "", "", false},
+		{"目录不存在", filepath.Join(base, "missing"), "", false},
+		{"独立目录", shots, real, false},
+		{"在下载目录里", inDownloads, "", false},
+		{"在工作区里", cfg.Workspace, "", false},
+		{"包含工作区", base, "", true},
+		{"在 RUNTIME_DIR 里", cfg.GitStore(), "", true},
+	}
+	for _, c := range cases {
+		cfg.Screenshots = c.path
+		got, err := ScreenshotsMount(cfg)
+		if got != c.want || (err != nil) != c.fails {
+			t.Errorf("%s：得到 %q, %v", c.name, got, err)
+		}
+	}
+}
+
+func TestComposeAddsScreenshotsOverlayForDevMachines(t *testing.T) {
+	base := t.TempDir()
+	cfg := testutil.MakeConfig(t, base, "")
+	// 配置的路径经过一个链接：容器里用配置的路径，源用真实路径。
+	if err := os.MkdirAll(filepath.Join(base, "shots$1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "shots$1"), filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Screenshots = filepath.Join(base, "link")
+	model := `{"name":"p","services":{
+		"dev-a":{"volumes":[{"type":"bind","source":"/k","target":"` + SSHTarget + `"}]},
+		"proxy-a":{"volumes":[]}}}`
+	savedRequire, savedRun := require, runCommand
+	t.Cleanup(func() { require, runCommand = savedRequire, savedRun })
+	require = func(string) (string, error) { return "docker", nil }
+	var last []string
+	runCommand = func(args []string, _ util.Opts) (util.Result, error) {
+		last = args
+		return util.Result{Stdout: model}, nil
+	}
+	if _, err := compose(cfg, true, false, "ps"); err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(cfg.StateDir(), "compose.screenshots.json")
+	want := []string{"docker", "compose", "--project-directory", cfg.Root,
+		"-f", filepath.Join(cfg.Root, "compose.yaml"), "-f", overlay, "ps"}
+	if !slices.Equal(last, want) {
+		t.Fatalf("命令是 %v", last)
+	}
+	data, err := os.ReadFile(overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	real, _ := filepath.EvalSymlinks(cfg.Screenshots)
+	escape := func(p string) string { return `"` + strings.ReplaceAll(p, "$", "$$") + `"` }
+	if !strings.Contains(text, `"dev-a"`) || strings.Contains(text, "proxy-a") ||
+		!strings.Contains(text, `"source": `+escape(real)) || !strings.Contains(text, `"target": `+escape(cfg.Screenshots)) ||
+		!strings.Contains(text, `"read_only": true`) {
+		t.Fatal(text)
+	}
+
+	// 目录不存在时只用 compose.yaml。
+	cfg.Screenshots = filepath.Join(base, "missing")
+	if _, err := compose(cfg, true, false, "ps"); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(last, overlay) {
+		t.Fatalf("命令是 %v", last)
+	}
+}

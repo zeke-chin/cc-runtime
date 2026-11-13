@@ -67,15 +67,111 @@ var (
 	runCommand = util.Run
 	require    = util.Require
 	compose    = func(cfg config.Config, capture, allowFail bool, args ...string) (util.Result, error) {
-		docker, err := require("docker")
+		files, err := composeFiles(cfg)
 		if err != nil {
 			return util.Result{}, err
 		}
-		command := append([]string{docker, "compose", "--project-directory", cfg.Root,
-			"-f", filepath.Join(cfg.Root, "compose.yaml")}, args...)
-		return runCommand(command, util.Opts{Capture: capture, AllowFail: allowFail})
+		return composeWith(cfg, files, capture, allowFail, args...)
 	}
 )
+
+func composeWith(cfg config.Config, files []string, capture, allowFail bool, args ...string) (util.Result, error) {
+	docker, err := require("docker")
+	if err != nil {
+		return util.Result{}, err
+	}
+	command := []string{docker, "compose", "--project-directory", cfg.Root}
+	for _, f := range files {
+		command = append(command, "-f", f)
+	}
+	return runCommand(append(command, args...), util.Opts{Capture: capture, AllowFail: allowFail})
+}
+
+// composeFiles 是本部署的 Compose 文件：compose.yaml，以及配置了截图目录时生成的叠加文件。
+func composeFiles(cfg config.Config) ([]string, error) {
+	base := filepath.Join(cfg.Root, "compose.yaml")
+	dir, err := ScreenshotsMount(cfg)
+	if err != nil || dir == "" {
+		return []string{base}, err
+	}
+	result, err := composeWith(cfg, []string{base}, true, false, "config", "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	var project Project
+	if err := json.Unmarshal([]byte(result.Stdout), &project); err != nil {
+		return nil, fmt.Errorf("无法解析 docker compose config 的输出：%w", err)
+	}
+	// 源用真实路径；容器里用配置的路径，使用者粘贴的就是它。
+	overlay := screenshotsOverlay(DevServices(project), dir, filepath.Clean(cfg.Screenshots))
+	data, err := json.MarshalIndent(overlay, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(cfg.StateDir(), "compose.screenshots.json")
+	if err := os.MkdirAll(cfg.StateDir(), 0o755); err != nil {
+		return nil, err
+	}
+	// Compose 会对值里的 $ 做变量替换，JSON 里也一样；路径里的 $ 要转义。
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(data), "$", "$$")), 0o644); err != nil {
+		return nil, err
+	}
+	return []string{base, path}, nil
+}
+
+// ScreenshotsMount 返回要挂进开发机的截图目录（真实路径）。没配置、目录不存在，
+// 或它已经在工作区、下载目录里（开发机里本来就能看到）时返回空。
+func ScreenshotsMount(cfg config.Config) (string, error) {
+	if cfg.Screenshots == "" {
+		return "", nil
+	}
+	dir, err := filepath.EvalSymlinks(cfg.Screenshots)
+	if err != nil {
+		return "", nil
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", nil
+	}
+	real := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	workspace, downloads, runtime := real(cfg.Workspace), real(cfg.Downloads), real(cfg.Runtime)
+	for _, covered := range []string{workspace, downloads} {
+		if within(dir, covered) {
+			return "", nil
+		}
+	}
+	for _, inner := range []string{workspace, downloads, runtime} {
+		if within(inner, dir) {
+			return "", util.Errorf("截图目录 %s 包含了工作区、下载目录或 RUNTIME_DIR，不能挂载；请把 HOST_SCREENSHOTS_PATH 改成具体的截图目录", dir)
+		}
+	}
+	if within(dir, runtime) {
+		return "", util.Errorf("截图目录 %s 在 RUNTIME_DIR 里，不能挂载", dir)
+	}
+	return dir, nil
+}
+
+// within 判断 path 是否是 dir 本身或在 dir 之内。
+func within(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
+
+// screenshotsOverlay 让每台开发机在相同路径上只读挂载截图目录。
+func screenshotsOverlay(machines []string, source, target string) map[string]any {
+	services := map[string]any{}
+	for _, name := range machines {
+		services[name] = map[string]any{"volumes": []any{map[string]any{
+			"type": "bind", "source": source, "target": target, "read_only": true,
+			"bind": map[string]any{"create_host_path": false},
+		}}}
+	}
+	return map[string]any{"services": services}
+}
 
 func Model(cfg config.Config) (Project, error) {
 	result, err := compose(cfg, true, false, "config", "--format", "json")

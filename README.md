@@ -43,7 +43,7 @@
 
 2. **安装 CLI。** `scripts/install.sh` 编译 `cc-runtime` 并装到 `~/.local/bin`（确保它在 `PATH` 里）。二进制记录了本仓库的位置，在任何目录下都能运行；更新代码后重新运行这个脚本即可。
 
-3. **环境变量。** `cp .env.example .env`，填写 `PASSWORD`（开发机的 SSH/VNC 密码）和三个路径：`WORKSPACE_DIR`（Mac 的工作区）、`RUNTIME_DIR`（Linux 副本和 git 数据，放在工作区之外）、`DOWNLOADS_DIR`（Mac 的下载目录）。工作区、git 数据和下载目录在开发机里挂在和 Mac 相同的路径上。
+3. **环境变量。** `cp .env.example .env`，填写 `PASSWORD`（开发机的 SSH/VNC 密码）和三个路径：`WORKSPACE_DIR`（Mac 的工作区）、`RUNTIME_DIR`（Linux 副本和 git 数据，放在工作区之外）、`DOWNLOADS_DIR`（Mac 的下载目录）。工作区、git 数据和下载目录在开发机里挂在和 Mac 相同的路径上。可选的 `HOST_SCREENSHOTS_PATH` 把截图目录也以相同路径只读挂进开发机。
 
 4. **工作区同步。**
 
