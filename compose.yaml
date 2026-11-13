@@ -1,68 +1,55 @@
+# Paths come from .env (see .env.example). Compose does not expand "~": use absolute paths.
+x-dev-machine: &dev-machine
+  image: ${DEV_IMAGE:-ghcr.io/zeke-chin/cc-runtime:latest}
+  entrypoint: [/bin/bash, /usr/local/bin/entrypoint.sh]
+  restart: unless-stopped
+  cap_drop: [NET_RAW]
+  sysctls:
+    net.ipv6.conf.all.disable_ipv6: "1"
+
+x-bind: &bind
+  type: bind
+  bind:
+    create_host_path: false
+
 services:
-  dev:
-    image: ghcr.io/zeke-chin/cc-runtime:latest
-    entrypoint: [/bin/bash, /usr/local/bin/entrypoint.sh]
-    restart: unless-stopped
-    cap_drop: [NET_RAW]
-    sysctls:
-      net.ipv6.conf.all.disable_ipv6: "1"
+  # Development machine dev-PA; egress via the main gateway (proxy).
+  # Each machine has its own home, SSH host keys and machine-id under
+  # dev-runtimes/<name>/. All machines share the Linux mirror of the workspace
+  # and the git store (see docs/architecture.md).
+  dev-PA:
+    <<: *dev-machine
     depends_on:
       proxy:
         condition: service_healthy
     environment:
       PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
       TZ: America/New_York
+      PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
+      XDG_CACHE_HOME: /home/dev/.cache
     volumes:
-      - type: bind
-        source: ./dev-runtime/ssh-host-keys
-        target: /var/lib/cc-runtime/ssh
-        bind:
-          create_host_path: false
-      # Per-machine identity instead of the machine-id once baked into the image.
-      - type: bind
-        source: ./dev-runtime/machine-id
-        target: /etc/machine-id
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./dev-runtime/machine-id
-        target: /var/lib/dbus/machine-id
-        read_only: true
-        bind:
-          create_host_path: false
+      - {<<: *bind, source: ./dev-runtimes/dev-PA/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
+      - {<<: *bind, source: ./dev-runtimes/dev-PA/machine-id, target: /etc/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-PA/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-PA/home, target: /home/dev}
+      - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: /home/dev/workspace}
+      - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
+      - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
+      - type: volume
+        source: cache
+        target: /home/dev/.cache
+        volume: {nocopy: true, subpath: "${DEV_PA_CACHE:-dev-PA}"}
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-      - type: bind
-        source: ./dev-runtime/home
-        target: /home/dev
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /Users/zeke/workspace
-        target: /home/dev/workspace
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /Users/zeke/Downloads
-        target: /home/dev/Downloads
-        bind:
-          create_host_path: false
       - ./proxy/resolv.conf:/etc/resolv.conf:ro
     networks:
       private:
         ipv4_address: 172.30.0.10
 
-  # Second development machine; egress via proxy-california (California node).
-  # Distinct identity: own home, SSH host keys, machine-id and hostname.
-  # The hostname keeps the machine's original name.
+  # Development machine dev-CA; egress via proxy-california (California node).
+  # Its hostname keeps the machine's original name.
   dev-CA:
-    image: ghcr.io/zeke-chin/cc-runtime:latest
+    <<: *dev-machine
     hostname: dev-california
-    entrypoint: [/bin/bash, /usr/local/bin/entrypoint.sh]
-    restart: unless-stopped
-    cap_drop: [NET_RAW]
-    sysctls:
-      net.ipv6.conf.all.disable_ipv6: "1"
     depends_on:
       proxy-california:
         condition: service_healthy
@@ -72,55 +59,18 @@ services:
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
     volumes:
-      - type: bind
-        source: ./dev-runtimes/dev-CA/ssh-host-keys
-        target: /var/lib/cc-runtime/ssh
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./dev-runtimes/dev-CA/machine-id
-        target: /etc/machine-id
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./dev-runtimes/dev-CA/machine-id
-        target: /var/lib/dbus/machine-id
-        read_only: true
-        bind:
-          create_host_path: false
-      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-      - type: bind
-        source: ./dev-runtimes/dev-CA/home
-        target: /home/dev
-        bind:
-          create_host_path: false
-      # Linux mirror of the Mac workspace, kept in sync by Mutagen on the Mac
-      # (scripts/workspace-sync.py). Dependencies installed here stay Linux-only.
-      - type: bind
-        source: /Users/zeke/.cc-runtime/linux-workspace
-        target: /home/dev/workspace
-        bind:
-          create_host_path: false
-      # Shared git data; .git symlinks in both trees point here (scripts/git-store.py).
-      - type: bind
-        source: /Users/zeke/.cc-runtime/git
-        target: /Users/zeke/.cc-runtime/git
-        bind:
-          create_host_path: false
-      # Static cache declaration: dev-CA is not part of the dependency scan.
-      # The subpath is the one it used as dev-california (aarch64, workspace hash).
+      - {<<: *bind, source: ./dev-runtimes/dev-CA/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
+      - {<<: *bind, source: ./dev-runtimes/dev-CA/machine-id, target: /etc/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-CA/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-CA/home, target: /home/dev}
+      - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: /home/dev/workspace}
+      - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
+      - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
       - type: volume
-        source: dependencies
+        source: cache
         target: /home/dev/.cache
-        volume:
-          nocopy: true
-          subpath: linux-aarch64/b7bcf81f26a3f3a5/cache-dev-california
-      - type: bind
-        source: /Users/zeke/Downloads
-        target: /home/dev/Downloads
-        bind:
-          create_host_path: false
+        volume: {nocopy: true, subpath: "${DEV_CA_CACHE:-dev-CA}"}
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./proxy/resolv-california.conf:/etc/resolv.conf:ro
     networks:
       private:
@@ -222,15 +172,15 @@ services:
       timeout: 3s
       retries: 12
 
-  # Only this short-lived helper shares dev's network namespace.
-  # It never receives the proxy config or credentials.
-  dev-network-init:
+  # Short-lived helpers that share a machine's network namespace to route it
+  # through its gateway. They never receive the proxy config or credentials.
+  dev-PA-network-init:
     image: metacubex/mihomo:latest
-    network_mode: service:dev
+    network_mode: service:dev-PA
     restart: "no"
     cap_add: [NET_ADMIN]
     depends_on:
-      dev:
+      dev-PA:
         condition: service_started
     entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
     volumes:
@@ -251,9 +201,10 @@ services:
       - ./scripts/dev-network-init.sh:/scripts/dev-network-init.sh:ro
 
 volumes:
-  dependencies:
+  # Per-machine ~/.cache (subpaths in .env). External, so `down -v` keeps it.
+  cache:
     external: true
-    name: cc-runtime_dependencies
+    name: ${CACHE_VOLUME:-cc-runtime-cache}
 
 networks:
   private:

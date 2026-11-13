@@ -1,15 +1,17 @@
+# Credentials and machine-specific settings
 .env
 proxy/config.yaml
 proxy/config-california.yaml
-.runtime/
-__pycache__/
-dev-home/
-ssh-host-keys/
-dev-runtime/home/
-dev-runtime/ssh-host-keys/
-dev-runtime/machine-id
+sync-ignores.local
+
+# Per-machine runtime state: homes, SSH host keys, machine-ids, Tailscale login
 dev-runtimes/
+dev-runtime/
 tailscale/state/
 
-
+# Private notes and working records
 docs/local/
+
+# Python
+.venv/
+__pycache__/
