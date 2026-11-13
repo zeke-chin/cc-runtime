@@ -7,7 +7,7 @@ client_ip="${CLIENT_IP:-172.30.0.10}"
 
 config=/root/.config/mihomo/config.yaml
 if grep -Eq 'REPLACE_|airport\.example\.com|residential\.example\.com' "$config"; then
-    echo 'Fill in proxy/config.yaml with your airport node and residential proxy first.' >&2
+    echo 'Fill in proxy/config-pennsylvania.yaml with your airport node and residential proxy first.' >&2
     exit 1
 fi
 /mihomo -t -f "$config"

@@ -1,6 +1,6 @@
 # cc-runtime
 
-在一台 Mac 上运行多台 Linux 开发机（`dev-PA`、`dev-CA`），每台有独立身份和出口网关，共用一份通过 Mutagen 同步的工作区。设计见 `docs/architecture.md` 和 `docs/workspace.md`，使用见 `README.md`。
+在一台 Mac 上运行多台 Linux 开发机（`dev-pennsylvania`、`dev-california`），每台有独立身份和出口网关，共用一份通过 Mutagen 同步的工作区。设计见 `docs/architecture.md` 和 `docs/workspace.md`，使用见 `README.md`。
 
 ## 常用命令
 
@@ -20,7 +20,7 @@ cc-runtime status            # 状态面板（在 Mac 上运行）
 - 更换镜像、重建容器或移动存储时，保留 SSH 主机密钥和 Tailscale 状态。移动运行中的状态前先停止对应服务，重启后核对身份（主机密钥指纹、machine-id）。
 - 用 `cc-runtime up` 或 `cc-runtime compose` 启动服务。它们会先准备家目录、身份和缓存；直接 `docker compose up` 创建开发机会跳过这一步，新机器会得到全新的身份。
 - 开发机之间保持身份独立：不要在家目录之间复制 SSH 主机密钥、machine-id、遥测 ID、`~/.claude` 或 `~/.claude.json`。工具凭据和 SSH 客户端密钥只按 `internal/seed/seed.go` 里的 `Credentials` 共享，往里加东西前先征得使用者同意。新家目录只用 `cc-runtime seed-home` 初始化。
-- 代理配置：先改 `proxy/config.example.yaml`，再把同样的改动应用到每份实际配置（`proxy/config.yaml`、`proxy/config-california.yaml`），然后运行 `cc-runtime check proxy`。模板里不能出现真实凭据或节点/VPS 地址，见 `proxy/README.md`。
+- 代理配置：先改 `proxy/config.example.yaml`，再把同样的改动应用到每份实际配置（`proxy/config-pennsylvania.yaml`、`proxy/config-california.yaml`），然后运行 `cc-runtime check proxy`。模板里不能出现真实凭据或节点/VPS 地址，见 `proxy/README.md`。
 
 ## 工作区与 git 数据
 
@@ -28,11 +28,6 @@ cc-runtime status            # 状态面板（在 Mac 上运行）
 - 同步忽略名单：所有部署共用的条目在 `sync-ignores`（入库）；只属于这台 Mac 的条目在 `sync-ignores.local`（不入库）。名单在会话创建时固定，改动要重建会话才生效；重建前确认会话没有冲突，并征得使用者同意。
 - 不要同步活的状态：容器以可写方式挂载的、工作区内的路径（比如数据库目录）必须在忽略名单里。改动后运行 `cc-runtime check ignores`。
 - 不改动 Mac 侧工作区里的项目内容（去重只替换 Linux 副本里的文件）。
-
-## 迁移期注意（`dev` → `dev-PA` 完成前）
-
-- 运行中的 `cc-runtime-dev-1` 是旧方案的容器，已不在 `compose.yaml` 里，也不能用 compose 重建。不要使用 `--remove-orphans`，也不要用 `--allow-orphans` 启动 `dev-PA`。迁移步骤在 `docs/local/dependency-isolation/stage4-handoff.md`，必须从 Mac 终端或 `dev-CA` 执行，不能在 `dev` 里执行。
-- `dev` 直接挂载 Mac 的工作区。在 `dev` 里可以 `go test ./...`，但不要往仓库里编译二进制；安装只在 Mac 上用 `scripts/install.sh`。
 
 ## 代码与文档
 

@@ -24,9 +24,6 @@ const (
 	HomeTarget = "/home/dev"
 )
 
-// LegacyMachineDirs：旧的机器目录 -> 新位置。移动之前启动新服务会生成全新的身份，所以拒绝。
-var LegacyMachineDirs = map[string]string{"dev-runtime": "dev-runtimes/dev-PA"}
-
 var creatingSubcommands = map[string]bool{"up": true, "create": true, "run": true}
 
 type Mount struct {
@@ -217,29 +214,6 @@ func MountFor(s Service, target string) *Mount {
 	for i := range s.Volumes {
 		if s.Volumes[i].Target == target {
 			return &s.Volumes[i]
-		}
-	}
-	return nil
-}
-
-// CheckLegacy 拒绝创建状态仍在旧目录里的机器。
-func CheckLegacy(cfg config.Config, name string, s Service) error {
-	var sources []string
-	for _, m := range s.Volumes {
-		if m.Type == "bind" && m.Source != "" {
-			sources = append(sources, util.Resolve(m.Source))
-		}
-	}
-	for old, new := range LegacyMachineDirs {
-		newDir := util.Resolve(filepath.Join(cfg.Root, new))
-		usesNew := false
-		for _, src := range sources {
-			if src == newDir || strings.HasPrefix(src, newDir+"/") {
-				usesNew = true
-			}
-		}
-		if usesNew && util.Lexists(filepath.Join(cfg.Root, old)) && !util.Lexists(newDir) {
-			return util.Errorf("%s：%s/ 仍保存着这台机器的家目录和身份；请先停止旧容器，把它移到 %s/，再启动 %s", name, old, new, name)
 		}
 	}
 	return nil
@@ -505,11 +479,6 @@ func Prepare(cfg config.Config, p Project, services []string) error {
 	for _, name := range DevServices(p) {
 		if services == nil || wanted[name] {
 			machines = append(machines, name)
-		}
-	}
-	for _, name := range machines {
-		if err := CheckLegacy(cfg, name, p.Services[name]); err != nil {
-			return err
 		}
 	}
 	for _, name := range machines {

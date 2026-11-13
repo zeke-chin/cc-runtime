@@ -11,8 +11,8 @@ flowchart LR
         GIT[(git store)]
     end
     subgraph private[私网 172.30.0.0/24]
-        PA[dev-PA] -->|默认路由| P1[proxy]
-        CA[dev-CA] -->|默认路由| P2[proxy-california]
+        PA[dev-pennsylvania] -->|默认路由| P1[proxy-pennsylvania]
+        CA[dev-california] -->|默认路由| P2[proxy-california]
         TS[tailscale] -->|SSH| PA
     end
     LW -. bind mount .-> PA & CA
@@ -24,9 +24,9 @@ flowchart LR
 
 | 服务 | 网络 | 职责 |
 |---|---|---|
-| `dev-PA`、`dev-CA` | 仅私网（`.10`、`.11`） | 开发机：开发工具、SSH、远程桌面 |
-| `proxy`、`proxy-california` | 私网（`.2`、`.4`）+ 出口网络 | 各自开发机的透明网关：TCP 代理、DNS、入站转发 |
-| `tailscale` | 私网（`.3`）+ 出口网络 | 从 tailnet 转发 SSH 到 `dev-PA:22` |
+| `dev-pennsylvania`、`dev-california` | 仅私网（`.10`、`.11`） | 开发机：开发工具、SSH、远程桌面 |
+| `proxy-pennsylvania`、`proxy-california` | 私网（`.2`、`.4`）+ 出口网络 | 各自开发机的透明网关：TCP 代理、DNS、入站转发 |
+| `tailscale` | 私网（`.3`）+ 出口网络 | 从 tailnet 转发 SSH 到 `dev-pennsylvania:22` |
 | `*-network-init` | 临时共享对应开发机的网络命名空间 | 设置默认路由和 DNS 防绕过规则，然后退出 |
 
 开发机按 `dev-{代号}` 命名，代号一般取它的出口地点。增加一台开发机，就是增加一个开发机服务、一个网关和一个 `network-init`，并在 `dev-runtimes/` 下放它的状态目录。
@@ -48,20 +48,20 @@ flowchart LR
 
 | 开发机 | SSH | VNC | noVNC |
 |---|---|---|---|
-| `dev-PA` | `127.0.0.1:2222` | `127.0.0.1:5901` | `http://127.0.0.1:6080/vnc.html` |
-| `dev-CA` | `127.0.0.1:2223` | `127.0.0.1:5902` | `http://127.0.0.1:6081/vnc.html` |
+| `dev-pennsylvania` | `127.0.0.1:2222` | `127.0.0.1:5901` | `http://127.0.0.1:6080/vnc.html` |
+| `dev-california` | `127.0.0.1:2223` | `127.0.0.1:5902` | `http://127.0.0.1:6081/vnc.html` |
 
 端口只绑定宿主机的 `127.0.0.1`。网关还在私网上开一个端口（`<网关 IP>:10023`），转发到宿主机的 SSH（`host.docker.internal:22`），开发机可以借此在 Mac 上执行命令；该端口不发布到宿主机。
 
 ### Tailscale
 
-`tailscale` 以 userspace 模式运行，不需要 TUN、`NET_ADMIN` 或宿主机端口。它通过 Tailscale Serve 把 tailnet 内的 TCP 22 转发到 `dev-PA:22`，SSH 认证由开发机的 OpenSSH 完成；不启用 Tailscale SSH、Funnel、子网路由或出口节点。登录状态在 `tailscale/state/`，重建后复用同一设备身份。
+`tailscale` 以 userspace 模式运行，不需要 TUN、`NET_ADMIN` 或宿主机端口。它通过 Tailscale Serve 把 tailnet 内的 TCP 22 转发到 `dev-pennsylvania:22`，SSH 认证由开发机的 OpenSSH 完成；不启用 Tailscale SSH、Funnel、子网路由或出口节点。登录状态在 `tailscale/state/`，重建后复用同一设备身份。
 
 ### 可见性边界
 
 开发机能看到自己的私网地址和默认网关，看不到网关的规则和进程；但不能保证程序无法从出口 IP、延迟等推断出代理的存在。
 
-本仓库位于共享的工作区内，所以开发机能读到仓库里的 `proxy/config.yaml` 和 `.env`。需要「开发机读不到代理凭据」这条边界时，要把部署目录移到工作区之外。
+本仓库位于共享的工作区内，所以开发机能读到仓库里的 `proxy/config-pennsylvania.yaml` 和 `.env`。需要「开发机读不到代理凭据」这条边界时，要把部署目录移到工作区之外。
 
 ## 开发机与身份
 

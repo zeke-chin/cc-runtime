@@ -12,9 +12,9 @@
 ```
             Mac                                          私网 172.30.0.0/24
   ┌──────────────────────────┐            ┌──────────────────────────────────────┐
-  │ workspace ⇄ linux-workspace ───────────► dev-PA ──► proxy ─────────► 出口 A  │
-  │  (Mutagen)    git store  │  bind mount │ dev-CA ──► proxy-california ► 出口 B │
-  └──────────────────────────┘            │ tailscale ──SSH──► dev-PA            │
+  │ workspace ⇄ linux-workspace ───────────► dev-pennsylvania ──► proxy-pennsylvania ──► 出口 A  │
+  │  (Mutagen)    git store  │  bind mount │ dev-california ──► proxy-california ► 出口 B │
+  └──────────────────────────┘            │ tailscale ──SSH──► dev-pennsylvania      │
                                           └──────────────────────────────────────┘
 ```
 
@@ -34,7 +34,7 @@
 1. **网关配置。** 每个网关一份实际配置，由模板派生：
 
    ```bash
-   cp proxy/config.example.yaml proxy/config.yaml
+   cp proxy/config.example.yaml proxy/config-pennsylvania.yaml
    cp proxy/config.example.yaml proxy/config-california.yaml
    chmod 600 proxy/config*.yaml
    ```
@@ -80,12 +80,12 @@
 
 | 开发机 | SSH | VNC | noVNC |
 |---|---|---|---|
-| `dev-PA` | `ssh -p 2222 dev@127.0.0.1` | `127.0.0.1:5901` | `http://127.0.0.1:6080/vnc.html` |
-| `dev-CA` | `ssh -p 2223 dev@127.0.0.1` | `127.0.0.1:5902` | `http://127.0.0.1:6081/vnc.html` |
+| `dev-pennsylvania` | `ssh -p 2222 dev@127.0.0.1` | `127.0.0.1:5901` | `http://127.0.0.1:6080/vnc.html` |
+| `dev-california` | `ssh -p 2223 dev@127.0.0.1` | `127.0.0.1:5902` | `http://127.0.0.1:6081/vnc.html` |
 
 - 经 Tailscale：`ssh dev@cc-dev`（设备名由 `TS_HOSTNAME` 设置），只开放 SSH，其他端口用 SSH 端口转发。
-- 从开发机到 Mac：Mac 开启「远程登录」后，`ssh -p 10023 <Mac 用户名>@<网关 IP>`（`dev-PA` 为 `172.30.0.2`，`dev-CA` 为 `172.30.0.4`）。
-- 网关控制 API：`127.0.0.1:19090`（`proxy`）、`127.0.0.1:19091`（`proxy-california`），密钥为 `PASSWORD`。
+- 从开发机到 Mac：Mac 开启「远程登录」后，`ssh -p 10023 <Mac 用户名>@<网关 IP>`（`dev-pennsylvania` 为 `172.30.0.2`，`dev-california` 为 `172.30.0.4`）。
+- 网关控制 API：`127.0.0.1:19090`（`proxy-pennsylvania`）、`127.0.0.1:19091`（`proxy-california`），密钥为 `PASSWORD`。
 
 ## 日常使用
 
@@ -116,7 +116,7 @@ scripts/install.sh    编译并安装 CLI
 scripts/entrypoint.sh 开发机启动脚本：SSH、VNC、桌面
 scripts/              网关和 network-init 容器内使用的脚本
 sync-ignores          同步忽略名单（所有部署共用）
-proxy/                网关配置模板、DNS 配置；实际配置不入库
+proxy/                网关配置模板、DNS 配置；实际配置（config-pennsylvania.yaml、config-california.yaml）不入库
 tailscale/config/     Tailscale Serve 配置；登录状态在 tailscale/state/，不入库
 dev-runtimes/         各开发机的家目录、SSH 主机密钥、machine-id，不入库
 docs/                 架构文档；docs/local/ 为本机私有笔记，不入库
@@ -126,7 +126,7 @@ sync-ignores.local    本机的同步忽略条目，不入库
 
 ## 维护
 
-- **改网关配置**：先改 `proxy/config.example.yaml`，同步到每份实际配置，运行 `cc-runtime check proxy`，再重建对应网关（`cc-runtime compose up -d --no-deps --force-recreate proxy`）。
+- **改网关配置**：先改 `proxy/config.example.yaml`，同步到每份实际配置，运行 `cc-runtime check proxy`，再重建对应网关（`cc-runtime compose up -d --no-deps --force-recreate proxy-pennsylvania`）。
 - **改镜像或 Compose 后重建开发机**：`cc-runtime up <开发机> --pull --force-recreate`。重建会中断其中的会话，身份和家目录保留。
 - **增加一台开发机**：在 `compose.yaml` 里加开发机、网关和 `network-init` 三个服务，网关配置加一份；用 `cc-runtime seed-home` 初始化 `dev-runtimes/<名字>/home`，然后 `cc-runtime up <名字>`。
 - **备份**：`dev-runtimes/`（身份和家目录）、`tailscale/state/`（同一设备身份不要在两处同时使用）、`RUNTIME_DIR/git`（所有仓库的历史）。`linux-workspace` 可以随时从 Mac 的工作区重新同步出来。

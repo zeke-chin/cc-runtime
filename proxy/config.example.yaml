@@ -1,10 +1,10 @@
-# Shared template for every gateway config (config.yaml, config-california.yaml).
+# Shared template for every gateway config (config-pennsylvania.yaml, config-california.yaml).
 # Edit this file FIRST, then apply the same change to each derived config.
 # See proxy/README.md for the derivation rules.
 #
 # Everything outside "GATEWAY-SPECIFIC" blocks must stay identical across the
 # derived configs, except placeholder values (REPLACE_*, *.example.com, 192.0.2.x).
-# The blocks below show the main residential gateway (config.yaml).
+# The blocks below show the main residential gateway (config-pennsylvania.yaml).
 #
 # This file is native Mihomo YAML: Compose does NOT expand variables here.
 # Controller address and secret are provided by proxy-entrypoint.sh from .env.
@@ -26,7 +26,7 @@ proxies:
     password: REPLACE_AIRPORT_PASSWORD
 
   # ==== GATEWAY-SPECIFIC: egress proxy ====
-  # The final egress node. config-california.yaml uses a VLESS Reality node
+  # The final egress node. config-california.yaml (proxy-california) uses a VLESS Reality node
   # named "california" with dialer-proxy: california-upstream instead.
   - name: residential
     type: http
@@ -63,7 +63,7 @@ proxy-groups:
   # ==== END GATEWAY-SPECIFIC ====
 
 # ==== GATEWAY-SPECIFIC: listeners ====
-# Main gateway: none. config-california.yaml adds a host-only mixed listener
+# Main gateway (proxy-pennsylvania): none. config-california.yaml adds a host-only mixed listener
 # on 0.0.0.0:7890 (published as 127.0.0.1:17890).
 # ==== END GATEWAY-SPECIFIC ====
 

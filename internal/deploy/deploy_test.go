@@ -26,7 +26,7 @@ func testImage() string {
 
 func machine(base, name string) Service {
 	address := "172.30.0.11"
-	if name == "dev-PA" {
+	if name == "dev-pennsylvania" {
 		address = "172.30.0.10"
 	}
 	return Service{Image: testImage(), Volumes: []Mount{
@@ -38,35 +38,17 @@ func machine(base, name string) Service {
 
 func project(root string) Project {
 	return Project{Name: "cc-runtime", Services: map[string]Service{
-		"dev-PA": machine(root, "dev-PA"), "dev-CA": machine(root, "dev-CA"),
-		"dev-PA-network-init": {Image: "x"}, "proxy": {Image: "x"}}}
+		"dev-pennsylvania": machine(root, "dev-pennsylvania"), "dev-california": machine(root, "dev-california"),
+		"dev-pennsylvania-network-init": {Image: "x"}, "proxy-pennsylvania": {Image: "x"}}}
 }
 
 func TestDevServicesAndHelpers(t *testing.T) {
 	p := project(t.TempDir())
-	if got := DevServices(p); !slices.Equal(got, []string{"dev-CA", "dev-PA"}) {
+	if got := DevServices(p); !slices.Equal(got, []string{"dev-california", "dev-pennsylvania"}) {
 		t.Fatal(got)
 	}
-	if got := WithHelpers(p, []string{"dev-PA", "proxy"}); !slices.Equal(got, []string{"dev-PA", "proxy", "dev-PA-network-init"}) {
+	if got := WithHelpers(p, []string{"dev-pennsylvania", "proxy-pennsylvania"}); !slices.Equal(got, []string{"dev-pennsylvania", "proxy-pennsylvania", "dev-pennsylvania-network-init"}) {
 		t.Fatal(got)
-	}
-}
-
-func TestLegacyDirectoryBlocksOnlyTheMachineThatMoved(t *testing.T) {
-	base := t.TempDir()
-	root := filepath.Join(base, "repo")
-	cfg := testutil.MakeConfig(t, base, root)
-	p := project(root)
-	os.Mkdir(filepath.Join(root, "dev-runtime"), 0o755) // 旧布局还在
-	if err := CheckLegacy(cfg, "dev-PA", p.Services["dev-PA"]); err == nil || !strings.Contains(err.Error(), "dev-runtime/ 仍保存着") {
-		t.Fatal(err)
-	}
-	if err := CheckLegacy(cfg, "dev-CA", p.Services["dev-CA"]); err != nil { // 不受影响
-		t.Fatal(err)
-	}
-	os.MkdirAll(filepath.Join(root, "dev-runtimes/dev-PA"), 0o755)
-	if err := CheckLegacy(cfg, "dev-PA", p.Services["dev-PA"]); err != nil { // 已经移动：可以
-		t.Fatal(err)
 	}
 }
 
@@ -76,8 +58,8 @@ func TestAddressConflictsWithRunningOrphans(t *testing.T) {
 	orphan.NetworkSettings.Networks = map[string]struct {
 		IPAddress string `json:"IPAddress"`
 	}{"cc-runtime_private": {IPAddress: "172.30.0.10"}}
-	got := AddressConflicts(project(t.TempDir()), []string{"dev-PA", "dev-CA"}, []Container{orphan})
-	if !slices.Equal(got, []string{"dev-PA 需要 172.30.0.10，但它仍被 cc-runtime-dev-1 占用"}) {
+	got := AddressConflicts(project(t.TempDir()), []string{"dev-pennsylvania", "dev-california"}, []Container{orphan})
+	if !slices.Equal(got, []string{"dev-pennsylvania 需要 172.30.0.10，但它仍被 cc-runtime-dev-1 占用"}) {
 		t.Fatal(got)
 	}
 }

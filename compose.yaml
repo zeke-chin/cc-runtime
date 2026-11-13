@@ -13,14 +13,15 @@ x-bind: &bind
     create_host_path: false
 
 services:
-  # Development machine dev-PA; egress via the main gateway (proxy).
+  # Development machine dev-pennsylvania; egress via proxy-pennsylvania.
   # Each machine has its own home, SSH host keys and machine-id under
   # dev-runtimes/<name>/. All machines share the Linux mirror of the workspace
   # and the git store (see docs/architecture.md).
-  dev-PA:
+  dev-pennsylvania:
     <<: *dev-machine
+    hostname: ab58b8f06991
     depends_on:
-      proxy:
+      proxy-pennsylvania:
         condition: service_healthy
     environment:
       PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
@@ -28,26 +29,25 @@ services:
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
     volumes:
-      - {<<: *bind, source: ./dev-runtimes/dev-PA/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
-      - {<<: *bind, source: ./dev-runtimes/dev-PA/machine-id, target: /etc/machine-id, read_only: true}
-      - {<<: *bind, source: ./dev-runtimes/dev-PA/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
-      - {<<: *bind, source: ./dev-runtimes/dev-PA/home, target: /home/dev}
+      - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
+      - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/machine-id, target: /etc/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/home, target: /home/dev}
       - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: /home/dev/workspace}
       - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
       - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
       - type: volume
         source: cache
         target: /home/dev/.cache
-        volume: {nocopy: true, subpath: "${DEV_PA_CACHE:-dev-PA}"}
+        volume: {nocopy: true, subpath: "${DEV_PENNSYLVANIA_CACHE:-dev-pennsylvania}"}
       - ./scripts/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./proxy/resolv.conf:/etc/resolv.conf:ro
     networks:
       private:
         ipv4_address: 172.30.0.10
 
-  # Development machine dev-CA; egress via proxy-california (California node).
-  # Its hostname keeps the machine's original name.
-  dev-CA:
+  # Development machine dev-california; egress via proxy-california (California node).
+  dev-california:
     <<: *dev-machine
     hostname: dev-california
     depends_on:
@@ -59,17 +59,17 @@ services:
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
     volumes:
-      - {<<: *bind, source: ./dev-runtimes/dev-CA/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
-      - {<<: *bind, source: ./dev-runtimes/dev-CA/machine-id, target: /etc/machine-id, read_only: true}
-      - {<<: *bind, source: ./dev-runtimes/dev-CA/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
-      - {<<: *bind, source: ./dev-runtimes/dev-CA/home, target: /home/dev}
+      - {<<: *bind, source: ./dev-runtimes/dev-california/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
+      - {<<: *bind, source: ./dev-runtimes/dev-california/machine-id, target: /etc/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-california/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
+      - {<<: *bind, source: ./dev-runtimes/dev-california/home, target: /home/dev}
       - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: /home/dev/workspace}
       - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
       - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
       - type: volume
         source: cache
         target: /home/dev/.cache
-        volume: {nocopy: true, subpath: "${DEV_CA_CACHE:-dev-CA}"}
+        volume: {nocopy: true, subpath: "${DEV_CALIFORNIA_CACHE:-dev-california}"}
       - ./scripts/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./proxy/resolv-california.conf:/etc/resolv.conf:ro
     networks:
@@ -100,7 +100,7 @@ services:
         ipv4_address: 172.30.0.3
       outbound: {}
 
-  proxy:
+  proxy-pennsylvania:
     image: metacubex/mihomo:latest
     environment:
       PASSWORD: ${PASSWORD:?Set PASSWORD in .env}
@@ -113,7 +113,7 @@ services:
     volumes:
       - ./scripts/proxy-entrypoint.sh:/scripts/proxy-entrypoint.sh:ro
       - type: bind
-        source: ./proxy/config.yaml
+        source: ./proxy/config-pennsylvania.yaml
         target: /root/.config/mihomo/config.yaml
         read_only: true
         bind:
@@ -134,7 +134,7 @@ services:
       retries: 12
 
   # Second gateway whose final egress is the California node.
-  # Serves dev-CA (CLIENT_IP).
+  # Serves dev-california (CLIENT_IP).
   proxy-california:
     image: metacubex/mihomo:latest
     environment:
@@ -162,7 +162,7 @@ services:
     ports:
       - "127.0.0.1:19091:9090"
       - "127.0.0.1:17890:7890"
-      # dev-CA SSH / VNC / noVNC via fixed DIRECT tunnels.
+      # dev-california SSH / VNC / noVNC via fixed DIRECT tunnels.
       - "127.0.0.1:2223:10022"
       - "127.0.0.1:5902:15901"
       - "127.0.0.1:6081:16080"
@@ -174,27 +174,27 @@ services:
 
   # Short-lived helpers that share a machine's network namespace to route it
   # through its gateway. They never receive the proxy config or credentials.
-  dev-PA-network-init:
+  dev-pennsylvania-network-init:
     image: metacubex/mihomo:latest
-    network_mode: service:dev-PA
+    network_mode: service:dev-pennsylvania
     restart: "no"
     cap_add: [NET_ADMIN]
     depends_on:
-      dev-PA:
+      dev-pennsylvania:
         condition: service_started
     entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
     volumes:
       - ./scripts/dev-network-init.sh:/scripts/dev-network-init.sh:ro
 
-  dev-CA-network-init:
+  dev-california-network-init:
     image: metacubex/mihomo:latest
-    network_mode: service:dev-CA
+    network_mode: service:dev-california
     restart: "no"
     cap_add: [NET_ADMIN]
     environment:
       GATEWAY_IP: 172.30.0.4
     depends_on:
-      dev-CA:
+      dev-california:
         condition: service_started
     entrypoint: [/bin/sh, /scripts/dev-network-init.sh]
     volumes:
@@ -215,4 +215,3 @@ networks:
         - subnet: 172.30.0.0/24
   outbound:
     enable_ipv6: false
-

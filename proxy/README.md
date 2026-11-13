@@ -5,7 +5,7 @@
 | 文件 | 网关容器 | 私网 IP | 最终出口 | 提交 Git |
 |---|---|---|---|---|
 | `config.example.yaml` | — | — | 共有模板（占位符） | 是 |
-| `config.yaml` | `proxy` | `172.30.0.2` | `residential` 家宽 HTTP 代理 | 否 |
+| `config-pennsylvania.yaml` | `proxy-pennsylvania` | `172.30.0.2` | `residential` 家宽 HTTP 代理 | 否 |
 | `config-california.yaml` | `proxy-california` | `172.30.0.4` | `california` 加州 VLESS Reality 节点 | 否 |
 | `resolv.conf`、`resolv-california.conf` | — | — | 开发机的 DNS 指向各自网关 | 是 |
 
@@ -13,7 +13,7 @@
 
 ## 修改流程
 
-**任何修改都先改 `config.example.yaml`，再把同样的改动同步到 `config.yaml` 和 `config-california.yaml`。** 然后执行：
+**任何修改都先改 `config.example.yaml`，再把同样的改动同步到 `config-pennsylvania.yaml` 和 `config-california.yaml`。** 然后执行：
 
 ```bash
 cc-runtime check proxy
@@ -34,12 +34,12 @@ cc-runtime check proxy
 
 规则和 DNS 只引用策略组 `egress`，不直接引用出口节点名。每个网关在自己的 `egress groups` 块里把 `egress` 指向本网关的出口节点，所以 `rules` 与 `dns` 两段在三个文件中完全相同。
 
-| 块 | `config.yaml`（主网关） | `config-california.yaml` |
+| 块 | `config-pennsylvania.yaml`（主网关） | `config-california.yaml` |
 |---|---|---|
 | `egress proxy` | `residential`（HTTP），`dialer-proxy: residential-upstream` | `california`（VLESS Reality + Vision），`server` 写 IP，`dialer-proxy: california-upstream` |
 | `egress groups` | `egress → residential`；`residential-upstream`：`default`（经 airport）/ `weimob`（直连） | `egress → california`；`california-upstream`：`airport`（默认）/ `DIRECT` |
 | `listeners` | 无 | `mac-mixed`：容器内 `0.0.0.0:7890`，宿主机发布为 `127.0.0.1:17890` |
-| `tunnels` | 到 Mac 的 SSH `172.30.0.2:10023`；`dev-PA`（`172.30.0.10`）的 SSH/VNC/noVNC 入站 | 到 Mac 的 SSH `172.30.0.4:10023`；`dev-CA`（`172.30.0.11`）的 SSH/VNC/noVNC 入站 |
+| `tunnels` | 到 Mac 的 SSH `172.30.0.2:10023`；`dev-pennsylvania`（`172.30.0.10`）的 SSH/VNC/noVNC 入站 | 到 Mac 的 SSH `172.30.0.4:10023`；`dev-california`（`172.30.0.11`）的 SSH/VNC/noVNC 入站 |
 
 ## 流量与 DNS
 
@@ -54,7 +54,7 @@ cc-runtime check proxy
 ## 加州网关
 
 - 宿主机 HTTP/SOCKS 代理：`127.0.0.1:17890`；控制 API：`127.0.0.1:19091`（密钥同 `.env` 的 `PASSWORD`）。主网关 API 为 `127.0.0.1:19090`。
-- `proxy-entrypoint.sh` 通过 `GATEWAY_IP` / `CLIENT_IP` 环境变量区分网关；`CLIENT_IP: 172.30.0.11` 为 `dev-CA`。入口脚本拒绝 Docker 私网访问 7890，dev 容器不能借此绕过透明网关。
+- `proxy-entrypoint.sh` 通过 `GATEWAY_IP` / `CLIENT_IP` 环境变量区分网关；`CLIENT_IP: 172.30.0.11` 为 `dev-california`。入口脚本拒绝 Docker 私网访问 7890，dev 容器不能借此绕过透明网关。
 - `california-upstream` 默认经 `airport` 连接出口节点，可在面板切到 `DIRECT`。
 - 服务端为 Xray 时注意：Xray 26 在 inbound 的 `minClientVer` 为空时会拒绝 Mihomo（表现为 `REALITY authentication failed`），需要把它设为 `1.0.0` 之类的低版本。
 
@@ -65,8 +65,8 @@ cc-runtime check proxy
 ```bash
 cc-runtime check proxy
 cc-runtime compose up -d --no-deps --force-recreate proxy-california
-# 主网关重建会短暂中断 dev-PA 的外网连接
-cc-runtime compose up -d --no-deps --force-recreate proxy
+# 主网关重建会短暂中断 dev-pennsylvania 的外网连接
+cc-runtime compose up -d --no-deps --force-recreate proxy-pennsylvania
 ```
 
 只校验语法时：

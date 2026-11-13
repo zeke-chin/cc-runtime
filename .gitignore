@@ -1,16 +1,12 @@
 # Credentials and machine-specific settings
 .env
-proxy/config.yaml
+proxy/config-pennsylvania.yaml
 proxy/config-california.yaml
 sync-ignores.local
 
 # Per-machine runtime state: homes, SSH host keys, machine-ids, Tailscale login
 dev-runtimes/
-dev-runtime/
 tailscale/state/
-
-# Private notes and working records
-docs/local/
 
 # 本地编译产物（安装用 scripts/install.sh，装到 ~/.local/bin）
 /cc-runtime
