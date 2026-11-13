@@ -1,6 +1,6 @@
 # 副本去重：用文件系统克隆回收重复空间
 
-状态：设计稿，尚未实施（2026-11-13）。属于 [依赖隔离](dependency-isolation.md) 方案 2 的配套设计。
+状态：已实现（2026-11-13），脚本为 `scripts/workspace-dedupe.py`。属于 [依赖隔离](dependency-isolation.md) 方案 2 的配套设计。
 
 ## 结论
 
@@ -76,7 +76,7 @@ macOS 没有「内核比较后再合并」的接口，只能先克隆、再替�
 
 1. 记下两侧的 inode、大小、修改时间、状态改变时间。
 2. 逐字节比较两侧内容。
-3. 用 `clonefile()` 把 Mac 侧的文件克隆到 Linux 文件旁边的临时名（同一目录，`.cc-dedupe-` 前缀）。
+3. 用 `clonefile()` 把 Mac 侧的文件克隆到 `~/.cc-runtime/dedupe-tmp/` 下的临时名。这个目录和副本在同一个卷上，所以第 6 步跨目录改名仍然是原子操作；它又在两棵同步树之外，所以 Mutagen 看不到临时文件。如果放在 Linux 文件旁边，Mutagen 可能在改名之前就把临时文件同步到 Mac 侧。
 4. 把临时文件的权限和修改时间设成 **Linux 侧原文件**的值，而不是 Mac 侧的。容器里 git 索引的文件状态缓存记录的是 Linux 侧的值，这样能少一次失效。
 5. 再记录一次两侧的元数据，和第 1 步对比。任何一项变了，就删除临时文件、跳过这一对。
 6. `rename()` 临时文件，覆盖 Linux 侧的原文件。
@@ -91,13 +91,25 @@ macOS 没有「内核比较后再合并」的接口，只能先克隆、再替�
 
 ### 不支持克隆的文件系统
 
-ext4、NTFS 等不支持克隆。脚本启动时用两棵树里的一个临时文件探测一次，不支持就明确报错退出，不做任何改动。
+ext4、NTFS 等不支持克隆。脚本启动时先确认两棵树和工作目录 `~/.cc-runtime` 在同一个文件系统上，再在工作目录里用两个临时文件探测一次（不在同步树里，免得探测文件被同步出去）。不支持就明确报错退出（退出码 3），不做任何改动。
 
 ### 可见性
 
 - 每次运行的统计（处理了多少对、跳过多少、回收了多少字节、耗时）追加到 `~/.cc-runtime/dedupe.log`。
 - 去重后 `du` 仍会把共享的文件按两份计算，要看 `df` 的剩余空间才知道实际占用。日志里记录运行前后 `df` 的差值。
 - `--dry-run` 只列出会处理的文件和预计回收的空间，不做改动。
+
+### 本地快照会推迟空间的释放
+
+APFS 的本地快照（Time Machine 每小时建一个）会继续引用被替换掉的旧数据块，这些块要等快照删除后才会释放。在 Time Machine 里排除 `linux-workspace` 不影响本地快照：本地快照是对整个卷做的，排除只作用于备份到外部目标的那部分。
+
+2026-11-13 第一次在真实副本上运行时，Linux 副本已经被 `com.apple.TimeMachine.2026-11-13-195207.local` 这个快照捕获，所以 63 GB 共享完成后 `df` 没有变化，要等这个快照被 Time Machine 清理（一般在成功备份之后，最长 24 小时，磁盘紧张时更早）才会释放。临时目录里的端到端测试没有这个问题，因为那些文件是在最近一次快照之后才创建的。
+
+所以：
+
+- 回收的空间会滞后释放，最多晚一个快照的保留期。磁盘占用仍然有上界，只是晚一点兑现。
+- 日志里的 `free_gained_bytes` 只反映当时 `df` 的变化，有快照时接近 0，不能当作回收量。判断去重效果看 `shared_bytes` 和 `already_bytes`。
+- 想立刻释放，可以手动删除那个快照（`tmutil deletelocalsnapshots <日期>`），代价是少一个本地还原点。脚本不会删除快照。
 
 ### 和同步会话的关系
 
@@ -115,13 +127,38 @@ ext4、NTFS 等不支持克隆。脚本启动时用两棵树里的一个临时�
 | 去重 Mac 侧自己的重复文件 | 不在本设计范围内，也不应改动使用者的 workspace |
 | 把大数据目录加进忽略名单 | 可以和去重同时使用。只适用于容器里确实不需要的目录，由使用者逐个决定 |
 
-## 实施清单
+## 使用
+
+```bash
+python3 scripts/workspace-dedupe.py run --dry-run   # 只统计会共享多少，不改动
+python3 scripts/workspace-dedupe.py run             # 去重一次
+python3 scripts/workspace-dedupe.py install         # macOS：装 launchd 任务，每天 04:00 运行
+python3 scripts/workspace-dedupe.py uninstall
+```
+
+- `--min-size`（默认 1 MiB）和 `--quiet-hours`（默认 24）可以调整筛选条件。
+- 会话有冲突或没有运行时不去重，退出码 2；文件系统不支持时退出码 3；有文件出错时退出码 1，其余文件照常处理。
+- 运行时的文件都在 `~/.cc-runtime/` 下：状态 `dedupe-state.json`，日志 `dedupe.log`（每次一行 JSON），launchd 的输出 `dedupe.launchd.log`，临时目录 `dedupe-tmp/`，锁 `dedupe.lock`。
+- 日志里的 `free_gained_bytes` 是运行前后 `df` 可用空间的差值，也就是实际回收的空间；`shared_bytes` 是本次新共享的文件大小之和；`already_bytes` 是此前已共享、本次跳过的部分。
+- Linux 上没有 `install`，用 systemd timer 每天运行 `run`。
+
+## 验证记录（2026-11-13）
+
+| 范围 | 结果 |
+| --- | --- |
+| 单元测试 | 筛选条件、状态文件跳过、dry-run 不改动、保留 Linux 侧的权限和修改时间、克隆期间文件被改写时放弃并保留新内容、跳过 `.git`、文件系统不支持时退出不改动。容器内 Python 3.14 和 Mac 的 Python 3.9 都通过 |
+| macOS 真实 `clonefile` | Mac 的 APFS 上测试通过：内容相同，inode 换新，权限和修改时间保留，没有残留的临时文件 |
+| Linux 真实 `FIDEDUPERANGE` | 在 Btrfs（OrbStack 的卷）上测试通过：40 MB 的文件跨过单次 16 MiB 的上限，`filefrag` 显示两个文件的物理块相同；内容不同的文件被内核拒绝 |
+| 端到端（Mac，临时 Mutagen 会话，1 GB） | 第一次运行 0.4 秒，`df` 实际回收约 1 GB；Mac 侧文件的 inode 和修改时间不变，会话没有冲突，Mac 侧没有出现临时文件；第二次运行全部按状态文件跳过；Mac 侧改动一个 256 MB 文件并同步后，第三次运行只重新处理这一个文件，又回收 256 MB；Linux 侧依赖目录里的文件没有被处理 |
+| 真实副本 | dry-run：2249 个不小于 1 MiB 的文件中，2242 个（63.4 GB）可以共享，7 个 24 小时内改过、先跳过，没有内容不一致或出错的，用时 48.5 秒。正式运行：2242 个全部共享，用时 44.8 秒；之后会话正常，`compare` 一致，没有残留的临时文件。由 launchd 触发的运行全部按状态文件跳过，用时 5.7 秒，退出码 0。`df` 没有立刻变化，原因见「本地快照」 |
+
+## 实施清单（已完成）
 
 | 动作 | 对象 |
 | --- | --- |
 | 新增 | `scripts/workspace-dedupe.py`：`run`（默认）、`--dry-run`、`--min-size`、`--quiet-hours`；忽略名单和路径从 `scripts/workspace-sync.py` 导入；macOS 和 Linux 两种实现 |
 | 新增 | 测试：条件筛选、状态文件跳过、元数据变化时放弃、不支持克隆时退出（克隆本身只在支持的文件系统上测） |
-| 新增 | `~/Library/LaunchAgents/` 下的 launchd 任务，每天 04:00 运行 |
+| 新增 | `~/Library/LaunchAgents/io.cc-runtime.workspace-dedupe.plist`，由 `workspace-dedupe.py install` 生成，每天 04:00 运行，使用低优先级 I/O。2026-11-13 已安装 |
 | 修改 | 设计文档「代价与已知限制」中「源码在 Mac 磁盘上存两份」一条，指向本文 |
 
 验证顺序：先在临时目录里复现上面的实测，再对真实副本运行 `--dry-run` 查看规模，然后正式运行一次，记录 `df` 前后的差值。
