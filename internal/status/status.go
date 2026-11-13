@@ -138,6 +138,9 @@ func jobSummary(record map[string]any) ui.Cell {
 		if len(moved) > 0 {
 			text += "：" + strings.Join(moved[:min(3, len(moved))], ", ")
 		}
+		if list, ok := summary["repaired"].([]any); ok && len(list) > 0 {
+			text += fmt.Sprintf("，修正路径 %d", len(list))
+		}
 		return ui.C(text+fmt.Sprintf("，跳过 %d", num(summary, "skipped")), ui.None)
 	}
 	data, _ := json.Marshal(summary)

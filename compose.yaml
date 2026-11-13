@@ -16,7 +16,7 @@ services:
   # Development machine dev-pennsylvania; egress via proxy-pennsylvania.
   # Each machine has its own home, SSH host keys and machine-id under
   # dev-runtimes/<name>/. All machines share the Linux mirror of the workspace
-  # and the git store (see docs/architecture.md).
+  # and the git store, mounted at the same paths as on the Mac (see docs/workspace.md).
   dev-pennsylvania:
     <<: *dev-machine
     hostname: ab58b8f06991
@@ -28,12 +28,15 @@ services:
       TZ: America/New_York
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
+      WORKSPACE_DIR: ${WORKSPACE_DIR}
     volumes:
       - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
       - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/machine-id, target: /etc/machine-id, read_only: true}
       - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
       - {<<: *bind, source: ./dev-runtimes/dev-pennsylvania/home, target: /home/dev}
-      - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: /home/dev/workspace}
+      # Same path as the Mac workspace, so paths git records (worktrees,
+      # submodules) resolve on both sides. ~/workspace is a link to it.
+      - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: "${WORKSPACE_DIR:?Set WORKSPACE_DIR in .env}"}
       - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
       - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
       - type: volume
@@ -58,12 +61,15 @@ services:
       TZ: America/Los_Angeles
       PYTHONPYCACHEPREFIX: /home/dev/.cache/python/pycache
       XDG_CACHE_HOME: /home/dev/.cache
+      WORKSPACE_DIR: ${WORKSPACE_DIR}
     volumes:
       - {<<: *bind, source: ./dev-runtimes/dev-california/ssh-host-keys, target: /var/lib/cc-runtime/ssh}
       - {<<: *bind, source: ./dev-runtimes/dev-california/machine-id, target: /etc/machine-id, read_only: true}
       - {<<: *bind, source: ./dev-runtimes/dev-california/machine-id, target: /var/lib/dbus/machine-id, read_only: true}
       - {<<: *bind, source: ./dev-runtimes/dev-california/home, target: /home/dev}
-      - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: /home/dev/workspace}
+      # Same path as the Mac workspace, so paths git records (worktrees,
+      # submodules) resolve on both sides. ~/workspace is a link to it.
+      - {<<: *bind, source: "${RUNTIME_DIR:?Set RUNTIME_DIR in .env}/linux-workspace", target: "${WORKSPACE_DIR:?Set WORKSPACE_DIR in .env}"}
       - {<<: *bind, source: "${RUNTIME_DIR}/git", target: "${RUNTIME_DIR}/git"}
       - {<<: *bind, source: "${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}", target: /home/dev/Downloads}
       - type: volume

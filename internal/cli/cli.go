@@ -381,7 +381,7 @@ func cmdGit(cfg config.Config, args []string) (int, error) {
 			changed, message = false, fmt.Sprintf("%s：出错：%v", rel, err)
 		}
 		fmt.Println(pickStyle(changed).S(message))
-		// 用 --all 时，跳过（忙、不支持）是预期的；明确指定的仓库必须成功。
+		// 用 --all 时，跳过（忙）是预期的；明确指定的仓库必须成功。
 		if !changed && !*all && !strings.HasSuffix(message, gitstore.AlreadyExternalized) {
 			failed++
 		}

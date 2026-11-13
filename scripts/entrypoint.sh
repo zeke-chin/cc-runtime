@@ -9,20 +9,35 @@ VNC_DISPLAY_PORT=${VNC_DISPLAY_PORT:-5901}
 echo "dev:$USER_PASSWORD" | sudo chpasswd
 echo "✅ User 'dev' password set."
 
-WORKSPACE_DIR="/home/dev/workspace"
+# 工作区挂在和 Mac 相同的路径（compose 传入 WORKSPACE_DIR），git 记下的路径在
+# 两侧通用。~/workspace 和 /workspace 是指向它的链接。
+WORKSPACE_DIR=${WORKSPACE_DIR:-/home/dev/workspace}
+HOME_WORKSPACE=/home/dev/workspace
 if [ ! -d "$WORKSPACE_DIR" ]; then
     echo "📂 Creating workspace directory $WORKSPACE_DIR..."
     sudo mkdir -p "$WORKSPACE_DIR"
     sudo chown dev:dev "$WORKSPACE_DIR"
 fi
+if [ "$WORKSPACE_DIR" != "$HOME_WORKSPACE" ]; then
+    # 以前的挂载点在持久家目录里留下一个空目录；换成链接。不空就不动。
+    if [ -d "$HOME_WORKSPACE" ] && [ ! -L "$HOME_WORKSPACE" ]; then
+        rmdir "$HOME_WORKSPACE" 2>/dev/null || echo "⚠️  $HOME_WORKSPACE is not empty; leaving it in place."
+    fi
+    if [ ! -e "$HOME_WORKSPACE" ] && [ ! -L "$HOME_WORKSPACE" ]; then
+        echo "🔗 Creating symlink $HOME_WORKSPACE -> $WORKSPACE_DIR..."
+        ln -s "$WORKSPACE_DIR" "$HOME_WORKSPACE"
+    fi
+    # 当前目录（镜像的 WORKDIR）可能正是刚换掉的目录；重新进入，后面的进程才取得到它。
+    cd "$HOME_WORKSPACE" 2>/dev/null || cd /home/dev
+fi
 
-if [ ! -e "/workspace" ]; then
+if [ ! -e "/workspace" ] && [ ! -L "/workspace" ]; then
     echo "🔗 Creating symlink /workspace -> $WORKSPACE_DIR..."
     sudo ln -s "$WORKSPACE_DIR" /workspace
 fi
 sudo chown -h dev:dev /workspace
 
-README_FILE="/home/dev/workspace/环境说明.md"
+README_FILE="$WORKSPACE_DIR/环境说明.md"
 if [ ! -f "$README_FILE" ]; then
     echo "📝 Generating welcome file 环境说明.md..."
     cat <<'EOF' | sudo tee "$README_FILE" > /dev/null
@@ -70,8 +85,8 @@ if [ ! -f "$README_FILE" ]; then
 
 ## 目录结构
 - `/home/dev`：您的主目录。
-- `/home/dev/workspace`：持久化工作区，会映射到宿主机。
-- `/workspace`：指向 `/home/dev/workspace` 的符号链接，兼容部分插件。
+- 工作区：挂在和 Mac 工作区相同的路径上，与 Mac 双向同步。
+- `/home/dev/workspace`、`/workspace`：指向工作区的符号链接。
 
 祝你编码愉快！
 EOF

@@ -22,7 +22,7 @@
 WORKSPACE_DIR (Mac)           ⇄  Mutagen 双向同步  ⇄   RUNTIME_DIR/linux-workspace
 Mac 的源码 + Mac 的依赖           依赖目录不参与同步         Linux 的源码副本 + Linux 的依赖
         │                                                        │ 挂载为每台开发机的
-        │ foo/.git 是链接                                        │ /home/dev/workspace
+        │ foo/.git 是链接                                        │ WORKSPACE_DIR（同一路径）
         └────────────►  RUNTIME_DIR/git/foo.git  ◄───────────────┘ foo/.git 是同一个链接
                         唯一的一份 git 数据
 ```
@@ -40,6 +40,7 @@ Mac 的源码 + Mac 的依赖           依赖目录不参与同步         Linu
 cc-runtime 选第三种。Linux 那棵树放在 Mac 的磁盘上（`RUNTIME_DIR/linux-workspace`），由开发机通过 bind mount 使用，而不是放在 Docker 卷里同步进容器：两端都在 macOS 上，变更检测是原生的，端点始终可用，数据在 Mac 上直接可见；代价是开发机内的文件读写要经过虚拟机边界，比卷慢。同步晚到或悄悄分叉是看不见的大代价，构建慢几秒是看得见的小代价，所以优先保证同步可靠。
 
 - 副本不在 workspace 里面，同步的两端互不包含，正确性不依赖任何一条忽略规则。
+- 开发机把副本挂在和 Mac 工作区**相同的路径**上（`WORKSPACE_DIR`，比如 `/Users/zeke/workspace`），`~/workspace` 和 `/workspace` 是指向它的链接。git 会把绝对路径记进 git 数据（worktree 的位置、子模块的工作目录），而且按真实路径计算相对路径；两侧路径一致，这些记录在两侧才指向同一个地方。程序取到的当前目录是解析链接后的真实路径，所以从 `~/workspace` 进入也一样。
 - 所有开发机系统和架构相同，依赖可以通用，所以共用一份副本：只有一个同步会话，依赖装一次各机器都能用。不要在两台开发机上同时对同一个项目安装依赖。
 
 ### 同步会话
@@ -62,10 +63,16 @@ cc-runtime 选第三种。Linux 那棵树放在 Mac 的磁盘上（`RUNTIME_DIR/
 | 已迁出，`.git` 是链接 | 两边都能用 git |
 | 未迁出，`.git` 是目录 | 只在它所在的一侧能用 git；另一侧有源码，git 报「不是仓库」 |
 
-未迁出是安全的默认状态：另一侧的 git 会明确报错，不会损坏数据。新仓库由定时任务 `externalize` 迁出。迁出时会跳过：
+未迁出是安全的默认状态：另一侧的 git 会明确报错，不会损坏数据。新仓库由定时任务 `externalize` 迁出。git 自己的锁文件存在（包括 worktree 和子模块的）、正在接收对象、两分钟内有改动，或者还没有提交（可能正在 clone 或提交）时跳过。
 
-- git 自己的锁文件存在、正在接收对象、两分钟内有改动，或者还没有提交（可能正在 clone 或提交）；
-- 含子模块或 `git worktree` 的仓库：子模块的 `core.worktree` 按 git 目录的真实路径解析，迁出后失效，之后的子模块命令又会写回只在一侧有效的路径；`worktree` 记录的绝对路径另一侧看不到，那一侧的 `git gc` 会把它当作可清理的删掉。这类仓库不迁出，在开发机里只有源码。
+**worktree 和子模块。** git 数据里记着它们的路径：worktree 的位置（`worktrees/<名>/gitdir`）和检出目录里指回 git 数据的 `.git` 文件；子模块的 `core.worktree` 是相对子模块 git 目录**真实路径**的相对路径。两侧工作区路径相同，git 在任一侧写下的这些路径在另一侧都成立，所以：
+
+- worktree 在哪一侧建，两侧的 `git worktree list` 都认得，都能在里面提交；任一侧的 `git worktree prune`、`git gc` 不会把它当作失效条目删掉。`--relative-paths` 也可以用。
+- 子模块（含嵌套）两侧都能用，包括 `git submodule update`、新加子模块。
+
+只有 git 数据移动的那一刻，相对旧位置写的路径会失效。迁出和 `restore` 移动数据后立刻改写它们（`relink`）：worktree 位置统一写成工作区里的绝对路径，`.git` 文件解析不到时改为指向新位置，子模块的 `core.worktree` 按新位置重算。定时任务每次也会检查已迁出的仓库，把只在一侧有效的路径改正：旧版开发机挂载点 `/home/dev/workspace` 下记的路径，以及在 Mac 上直接操作 Linux 树留下的路径。
+
+worktree 只要建在工作区之内（仓库里的子目录，或工作区里的其他目录）就两侧通用。建在工作区之外（`/tmp` 等）的只在创建它的一侧可用；另一侧把它标为 `prunable`，在那一侧 prune 会删掉它的元数据，创建它的一侧随之失效。`git status` 会对这类 worktree 给出警告。
 
 `cc-runtime git status` 报告每个仓库的状态和异常：链接断了、两个工作区共用一份 git 数据（`cp -R` 复制了项目）、git 数据没有工作区指向（删了项目）、链接目标和路径不符（改名或移动了项目）。`cc-runtime git restore` 把 git 数据移回 Mac 树的原位。
 
@@ -73,10 +80,9 @@ cc-runtime 选第三种。Linux 那棵树放在 Mac 的磁盘上（`RUNTIME_DIR/
 
 - 同一个仓库，同一时间只在一侧做 git 写操作（提交、切换分支、暂存、拉取）。只开着编辑器看不算。
 - 一侧切换分支或拉取后，另一侧的 git 数据立刻是新的，文件要等同步到达（约一秒）。这期间不要在另一侧做 git 写操作；不确定时运行 `mutagen sync flush linux-workspace`。
-- 复制项目用 `git clone`，不要 `cp -R`；已迁出的仓库不要再加子模块或 `worktree`，需要时先 `restore`。
+- 复制项目用 `git clone`，不要 `cp -R`。
+- worktree 建在工作区之内，推荐放在仓库里的子目录（如 `.agents/git_worktree/<名>`，记得让仓库忽略它）。
 - 删除项目后，对应的 git 数据要另外删除，`git status` 会列出来。
-
-**worktree 跨机可见性：** 已迁出的仓库把 `.git` 软链到统一绝对路径（`~/.cc-runtime/git/`，Mac 和开发机都挂到同一位置），所以 `git worktree` 在两侧都能建、都能用。但 worktree 的元数据只记创建时的绝对路径：哪一侧创建的 worktree，哪一侧的 `git worktree list` 认得它；另一侧因为路径对不上，把它标 `prunable`——但 worktree 里的文件仍正常同步，只是那一侧的 git 看不见它的状态。一个仓库的 worktree 固定在一侧创建、使用，不要两侧混建，否则对侧会堆出 prunable 条目。
 
 ### 忽略名单
 
@@ -116,7 +122,7 @@ APFS 的本地快照（Time Machine 每小时建一个）会继续引用被替�
 | 任务 | 时间 | 作用 |
 | --- | --- | --- |
 | `dedupe` | 每天 04:00 | 去重。同步会话不健康时跳过 |
-| `externalize` | 每 5 分钟 | 迁出新仓库的 git 数据 |
+| `externalize` | 每 5 分钟 | 迁出新仓库的 git 数据；改正已迁出仓库里只在一侧有效的 worktree/子模块路径 |
 
 `cc-runtime schedule install <任务>` 安装，`schedule list` 查看，`job log <任务>` 看历史。只有 macOS 有 `schedule`；Linux 上用 systemd timer 运行 `job run`。
 
@@ -135,6 +141,7 @@ APFS 的本地快照（Time Machine 每小时建一个）会继续引用被替�
 | 方案 | 原因 |
 | --- | --- |
 | `.git` 随源码一起同步 | 交错使用时稳定地产生 `index` 冲突，冲突后一侧的 git 状态悄悄过期 |
+| 开发机保留自己的工作区路径（`/home/dev/workspace`） | git 记下的路径只在一侧有效：worktree 在另一侧失效、会被那一侧的 prune 删掉，子模块迁出后无法使用；相对路径也不行，git 按真实路径计算，两侧工作区和 git 数据的相对位置不同 |
 | git 数据留在 Mac 仓库原位，Linux 树链接过去 | 可行，但开发机要可写地挂载整个 Mac workspace，Linux 侧的链接和新仓库的搬迁都要靠脚本逐个维护 |
 | 只同步 `.git` 的一部分（`index` 每侧一份） | 一侧提交后，另一侧的暂存区过期，显示一份反向的改动 |
 | 副本放 Docker 卷，同步进容器 | 依赖读写是原生速度，但同步要经过容器内代理、Linux 端靠轮询检测变化、端点依赖容器运行。保留为依赖速度不可接受时的后备 |

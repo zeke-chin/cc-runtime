@@ -251,8 +251,8 @@ if [ ! -f /persistent-home/.cc-runtime-home-initialized ]; then
         case "${path##*/}" in workspace|.cache|.claude|.claude.json) continue ;; esac
         cp -a -n "$path" /persistent-home/
     done
-    mkdir -p /persistent-home/workspace
-    chown "$1:$2" /persistent-home /persistent-home/workspace
+    # ~/workspace 由入口脚本建成指向工作区挂载点的链接。
+    chown "$1:$2" /persistent-home
     touch /persistent-home/.cc-runtime-home-initialized
 fi
 `

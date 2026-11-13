@@ -94,20 +94,25 @@ func runExternalize(cfg config.Config) (int, any, error) {
 		return 1, nil, err
 	}
 	results := gitstore.ExternalizeAll(layout, false)
-	moved := []string{}
+	moved, repaired, skipped := []string{}, []string{}, 0
 	for _, r := range results {
-		if r.Changed {
+		switch {
+		case r.Changed && r.Repair:
+			repaired = append(repaired, r.Rel)
+		case r.Changed:
 			moved = append(moved, r.Rel)
+		default:
+			skipped++
 		}
 	}
-	return 0, map[string]any{"externalized": moved, "skipped": len(results) - len(moved)}, nil
+	return 0, map[string]any{"externalized": moved, "repaired": repaired, "skipped": skipped}, nil
 }
 
 // Jobs 是任务登记表，按显示顺序排列。
 var Jobs = []Job{
 	{Name: "dedupe", Description: "在两棵目录树之间共享相同文件（文件系统克隆）",
 		Run: runDedupe, Calendar: &Calendar{Hour: 4, Minute: 0}},
-	{Name: "externalize", Description: "把新仓库的 git 数据移到共享目录",
+	{Name: "externalize", Description: "把新仓库的 git 数据移到共享目录，修正只在一侧有效的 worktree/子模块路径",
 		Run: runExternalize, Interval: 300},
 }
 

@@ -24,7 +24,7 @@ cc-runtime status            # 状态面板（在 Mac 上运行）
 
 ## 工作区与 git 数据
 
-- 真实仓库的 `.git` 只通过 `cc-runtime git externalize|restore` 改动，不要手工移动或建链接。含子模块或 `worktree` 的仓库不迁出。
+- 真实仓库的 `.git` 只通过 `cc-runtime git externalize|restore` 改动，不要手工移动或建链接。开发机把工作区挂在和 Mac 相同的路径上，worktree 和子模块因此两侧通用，不要改回各自的路径。
 - 同步忽略名单：所有部署共用的条目在 `sync-ignores`（入库）；只属于这台 Mac 的条目在 `sync-ignores.local`（不入库）。名单在会话创建时固定，改动要重建会话才生效；重建前确认会话没有冲突，并征得使用者同意。
 - 不要同步活的状态：容器以可写方式挂载的、工作区内的路径（比如数据库目录）必须在忽略名单里。改动后运行 `cc-runtime check ignores`。
 - 不改动 Mac 侧工作区里的项目内容（去重只替换 Linux 副本里的文件）。
