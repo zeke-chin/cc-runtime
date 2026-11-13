@@ -76,6 +76,8 @@ cc-runtime 选第三种。Linux 那棵树放在 Mac 的磁盘上（`RUNTIME_DIR/
 - 复制项目用 `git clone`，不要 `cp -R`；已迁出的仓库不要再加子模块或 `worktree`，需要时先 `restore`。
 - 删除项目后，对应的 git 数据要另外删除，`git status` 会列出来。
 
+**worktree 跨机可见性：** 已迁出的仓库把 `.git` 软链到统一绝对路径（`~/.cc-runtime/git/`，Mac 和开发机都挂到同一位置），所以 `git worktree` 在两侧都能建、都能用。但 worktree 的元数据只记创建时的绝对路径：哪一侧创建的 worktree，哪一侧的 `git worktree list` 认得它；另一侧因为路径对不上，把它标 `prunable`——但 worktree 里的文件仍正常同步，只是那一侧的 git 看不见它的状态。一个仓库的 worktree 固定在一侧创建、使用，不要两侧混建，否则对侧会堆出 prunable 条目。
+
 ### 忽略名单
 
 名单声明哪些目录属于每一侧私有，由三部分组成，`cc-runtime sync ignores` 列出完整结果：
