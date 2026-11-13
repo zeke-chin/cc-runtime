@@ -29,6 +29,8 @@ flowchart LR
 | `tailscale` | 私网（`.3`）+ 出口网络 | 从 tailnet 转发 SSH 到 `dev-pennsylvania:22` |
 | `*-network-init` | 临时共享对应开发机的网络命名空间 | 设置默认路由和 DNS 防绕过规则，然后退出 |
 
+开发机挂载的 Mac 目录都放在和 Mac 相同的路径上：工作区副本挂到 `WORKSPACE_DIR`，git 数据挂到 `RUNTIME_DIR/git`，下载目录挂到 `DOWNLOADS_DIR`；家目录里的 `~/workspace`、`~/Downloads` 是指向它们的链接。这样 git 记下的路径、使用者给出的 Mac 路径在开发机上都能直接用，原因见 [工作区](workspace.md#为什么是两棵树)。
+
 开发机按 `dev-{代号}` 命名，代号一般取它的出口地点。增加一台开发机，就是增加一个开发机服务、一个网关和一个 `network-init`，并在 `dev-runtimes/` 下放它的状态目录。
 
 ## 网络与网关
