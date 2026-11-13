@@ -26,7 +26,7 @@
 
 - macOS，OrbStack 或 Docker Desktop。Compose 需要支持卷的 `subpath`（已在 Docker 29.4 / Compose 5.1 上验证）。
 - [Mutagen](https://mutagen.io) 0.18 以上，守护进程注册为登录后启动：`mutagen daemon register && mutagen daemon start`。
-- [uv](https://docs.astral.sh/uv/)。CLI 需要 Python 3.9 以上，由 uv 管理。
+- [Go](https://go.dev/dl/) 1.26 以上，只在安装 CLI 时需要；装好的 `cc-runtime` 是单个二进制文件。
 - 去重需要支持克隆的文件系统（APFS；Linux 上为 Btrfs、XFS 等）。
 
 ## 开始
@@ -41,38 +41,40 @@
 
    按 [`proxy/README.md`](proxy/README.md) 填入节点和出口。这是原生 Mihomo YAML，网关会拒绝启动仍含模板占位符的配置。
 
-2. **环境变量。** `cp .env.example .env`，填写 `PASSWORD`（开发机的 SSH/VNC 密码）和三个路径：`WORKSPACE_DIR`（Mac 的工作区）、`RUNTIME_DIR`（Linux 副本和 git 数据，放在工作区之外）、`DOWNLOADS_DIR`。
+2. **安装 CLI。** `scripts/install.sh` 编译 `cc-runtime` 并装到 `~/.local/bin`（确保它在 `PATH` 里）。二进制记录了本仓库的位置，在任何目录下都能运行；更新代码后重新运行这个脚本即可。
 
-3. **工作区同步。**
+3. **环境变量。** `cp .env.example .env`，填写 `PASSWORD`（开发机的 SSH/VNC 密码）和三个路径：`WORKSPACE_DIR`（Mac 的工作区）、`RUNTIME_DIR`（Linux 副本和 git 数据，放在工作区之外）、`DOWNLOADS_DIR`。
+
+4. **工作区同步。**
 
    ```bash
    mkdir -p "$RUNTIME_DIR/linux-workspace" "$RUNTIME_DIR/git"
-   bin/cc-runtime check ignores      # 先检查忽略名单，按提示补充 sync-ignores.local
-   bin/cc-runtime sync create
-   bin/cc-runtime sync status        # 等首次同步完成
+   cc-runtime check ignores      # 先检查忽略名单，按提示补充 sync-ignores.local
+   cc-runtime sync create
+   cc-runtime sync status        # 等首次同步完成
    ```
 
    `linux-workspace` 里会有大量 Linux 依赖，建议从 Spotlight 和 Time Machine 中排除；`git` 目录保存所有仓库的历史，要保留在备份里。
 
-4. **迁出 git 数据并安装定时任务。**
+5. **迁出 git 数据并安装定时任务。**
 
    ```bash
-   bin/cc-runtime git externalize --all
-   bin/cc-runtime schedule install --all
+   cc-runtime git externalize --all
+   cc-runtime schedule install --all
    ```
 
-5. **启动。**
+   launchd 任务直接调用 `~/.local/bin/cc-runtime`，不依赖仓库里的任何环境。
+
+6. **启动。**
 
    ```bash
-   bin/cc-runtime up --pull
-   bin/cc-runtime status
+   cc-runtime up --pull
+   cc-runtime status
    ```
 
    `*-network-init` 设置完路由后退出，`Exited (0)` 是正常状态。
 
-6. **Tailscale（可选）。** `bin/cc-runtime compose logs tailscale` 里有登录链接；登录后在管理后台为该设备关闭密钥过期。
-
-`bin/cc-runtime` 在任何目录下都能运行；在仓库目录里也可以用 `uv run cc-runtime`。
+7. **Tailscale（可选）。** `cc-runtime compose logs tailscale` 里有登录链接；登录后在管理后台为该设备关闭密钥过期。
 
 ## 访问
 
@@ -89,7 +91,7 @@
 
 | 命令 | 作用 |
 |---|---|
-| `cc-runtime status [--git] [--watch]` | 状态面板：同步会话、定时任务、git 数据、磁盘、容器 |
+| `cc-runtime status [--git] [--watch[=秒]]` | 状态面板：同步会话、定时任务、git 数据、磁盘、容器 |
 | `cc-runtime up [服务…] [--pull]` | 启动服务；先准备家目录、身份和缓存 |
 | `cc-runtime compose <参数…>` | 本部署的 `docker compose` |
 | `cc-runtime sync status \| compare [--content] \| ignores \| create` | 同步会话 |
@@ -109,10 +111,11 @@ compose.yaml          服务、网络、挂载
 Dockerfile            开发镜像（构建上下文只有 entrypoint.sh 和 shell/）
 entrypoint.sh         开发机启动脚本：SSH、VNC、桌面
 shell/                镜像内的 shell 配置
-src/cc_runtime/       cc-runtime CLI
-bin/cc-runtime        CLI 的包装脚本
-tests/                单元测试和需要显式开启的 Docker 集成测试
+cmd/cc-runtime/       CLI 入口
+internal/             CLI 的各个部分（同步、git 数据、去重、定时任务、部署等）和测试
+scripts/install.sh    编译并安装 CLI
 scripts/              网关和 network-init 容器内使用的脚本
+sync-ignores          同步忽略名单（所有部署共用）
 proxy/                网关配置模板、DNS 配置；实际配置不入库
 tailscale/config/     Tailscale Serve 配置；登录状态在 tailscale/state/，不入库
 dev-runtimes/         各开发机的家目录、SSH 主机密钥、machine-id，不入库
@@ -132,8 +135,8 @@ sync-ignores.local    本机的同步忽略条目，不入库
 ## 测试
 
 ```bash
-uv run python -m unittest discover -s tests -t tests
-CC_RUNTIME_DOCKER_TEST=1 uv run python -m unittest discover -s tests -t tests   # 加上 Docker 集成测试
+go test ./...
+CC_RUNTIME_DOCKER_TEST=1 go test ./internal/deploy   # 加上 Docker 集成测试
 ```
 
 去重的 `FIDEDUPERANGE` 测试需要 Btrfs/XFS 等文件系统，`clonefile` 测试只在 macOS 上运行，条件不满足时自动跳过。

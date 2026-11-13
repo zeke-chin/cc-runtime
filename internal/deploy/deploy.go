@@ -1,0 +1,633 @@
+// Package deploy 用 Docker Compose 启动部署，并保留每台机器的身份。
+//
+// Compose 创建开发机之前，先在宿主机上准备它的持久部分：家目录只从镜像初始化
+// 一次；machine-id 和 SSH 主机密钥保留下来（从同一服务的现有容器迁移，新机器则
+// 新建）；缓存卷和它的子路径存在。
+package deploy
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/zeke-chin/cc-runtime/internal/config"
+	"github.com/zeke-chin/cc-runtime/internal/util"
+)
+
+const (
+	SSHTarget  = "/var/lib/cc-runtime/ssh"
+	HomeTarget = "/home/dev"
+)
+
+// LegacyMachineDirs：旧的机器目录 -> 新位置。移动之前启动新服务会生成全新的身份，所以拒绝。
+var LegacyMachineDirs = map[string]string{"dev-runtime": "dev-runtimes/dev-PA"}
+
+var creatingSubcommands = map[string]bool{"up": true, "create": true, "run": true}
+
+type Mount struct {
+	Type   string `json:"type"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Volume *struct {
+		Subpath string `json:"subpath"`
+	} `json:"volume,omitempty"`
+}
+
+type Network struct {
+	IPv4Address string `json:"ipv4_address"`
+}
+
+type Service struct {
+	Image    string              `json:"image"`
+	Volumes  []Mount             `json:"volumes"`
+	Networks map[string]*Network `json:"networks"`
+}
+
+type Project struct {
+	Name     string             `json:"name"`
+	Services map[string]Service `json:"services"`
+	Volumes  map[string]struct {
+		Name string `json:"name"`
+	} `json:"volumes"`
+}
+
+func (p Project) ServiceNames() []string {
+	names := make([]string, 0, len(p.Services))
+	for name := range p.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// 这几个函数可在测试中替换。
+var (
+	runCommand = util.Run
+	require    = util.Require
+	compose    = func(cfg config.Config, capture, allowFail bool, args ...string) (util.Result, error) {
+		docker, err := require("docker")
+		if err != nil {
+			return util.Result{}, err
+		}
+		command := append([]string{docker, "compose", "--project-directory", cfg.Root,
+			"-f", filepath.Join(cfg.Root, "compose.yaml")}, args...)
+		return runCommand(command, util.Opts{Capture: capture, AllowFail: allowFail})
+	}
+)
+
+func Model(cfg config.Config) (Project, error) {
+	result, err := compose(cfg, true, false, "config", "--format", "json")
+	if err != nil {
+		return Project{}, err
+	}
+	var project Project
+	if err := json.Unmarshal([]byte(result.Stdout), &project); err != nil {
+		return Project{}, fmt.Errorf("无法解析 docker compose config 的输出：%w", err)
+	}
+	return project, nil
+}
+
+// DevServices 是开发机服务（它们保存 SSH 主机密钥）。
+func DevServices(p Project) []string {
+	var names []string
+	for _, name := range p.ServiceNames() {
+		if MountFor(p.Services[name], SSHTarget) != nil {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// WithHelpers 加上每台机器的 network-init 辅助容器，它要在机器启动后运行。
+func WithHelpers(p Project, services []string) []string {
+	result := append([]string(nil), services...)
+	seen := map[string]bool{}
+	for _, s := range result {
+		seen[s] = true
+	}
+	for _, name := range services {
+		helper := name + "-network-init"
+		if _, ok := p.Services[helper]; ok && !seen[helper] {
+			result = append(result, helper)
+			seen[helper] = true
+		}
+	}
+	return result
+}
+
+type Container struct {
+	Name   string `json:"Name"`
+	Config struct {
+		Labels map[string]string `json:"Labels"`
+	} `json:"Config"`
+	NetworkSettings struct {
+		Networks map[string]struct {
+			IPAddress string `json:"IPAddress"`
+		} `json:"Networks"`
+	} `json:"NetworkSettings"`
+	Mounts []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	} `json:"Mounts"`
+}
+
+func Inspect(ids []string) ([]Container, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	docker, err := require("docker")
+	if err != nil {
+		return nil, err
+	}
+	result, err := runCommand(append([]string{docker, "inspect"}, ids...), util.Opts{Capture: true})
+	if err != nil {
+		return nil, err
+	}
+	var containers []Container
+	return containers, json.Unmarshal([]byte(result.Stdout), &containers)
+}
+
+func projectContainers(p Project) ([]Container, error) {
+	docker, err := require("docker")
+	if err != nil {
+		return nil, err
+	}
+	result, err := runCommand([]string{docker, "ps", "-q", "--filter", "label=com.docker.compose.project=" + p.Name},
+		util.Opts{Capture: true})
+	if err != nil {
+		return nil, err
+	}
+	return Inspect(strings.Fields(result.Stdout))
+}
+
+// runningOrphans 是本项目中服务已不在 compose.yaml 里的运行中容器。
+func runningOrphans(p Project) ([]Container, error) {
+	containers, err := projectContainers(p)
+	if err != nil {
+		return nil, err
+	}
+	var orphans []Container
+	for _, c := range containers {
+		if _, ok := p.Services[c.Config.Labels["com.docker.compose.service"]]; !ok {
+			orphans = append(orphans, c)
+		}
+	}
+	return orphans, nil
+}
+
+func AddressConflicts(p Project, services []string, orphans []Container) []string {
+	taken := map[string]string{}
+	for _, c := range orphans {
+		for _, network := range c.NetworkSettings.Networks {
+			if network.IPAddress != "" {
+				taken[network.IPAddress] = strings.TrimPrefix(c.Name, "/")
+			}
+		}
+	}
+	var conflicts []string
+	for _, name := range services {
+		networks := p.Services[name].Networks
+		keys := make([]string, 0, len(networks))
+		for key := range networks {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if networks[key] == nil {
+				continue
+			}
+			if owner, ok := taken[networks[key].IPv4Address]; ok {
+				conflicts = append(conflicts, fmt.Sprintf("%s 需要 %s，但它仍被 %s 占用", name, networks[key].IPv4Address, owner))
+			}
+		}
+	}
+	return conflicts
+}
+
+// ---- 每台机器的状态 ----------------------------------------------------------
+
+func MountFor(s Service, target string) *Mount {
+	for i := range s.Volumes {
+		if s.Volumes[i].Target == target {
+			return &s.Volumes[i]
+		}
+	}
+	return nil
+}
+
+// CheckLegacy 拒绝创建状态仍在旧目录里的机器。
+func CheckLegacy(cfg config.Config, name string, s Service) error {
+	var sources []string
+	for _, m := range s.Volumes {
+		if m.Type == "bind" && m.Source != "" {
+			sources = append(sources, util.Resolve(m.Source))
+		}
+	}
+	for old, new := range LegacyMachineDirs {
+		newDir := util.Resolve(filepath.Join(cfg.Root, new))
+		usesNew := false
+		for _, src := range sources {
+			if src == newDir || strings.HasPrefix(src, newDir+"/") {
+				usesNew = true
+			}
+		}
+		if usesNew && util.Lexists(filepath.Join(cfg.Root, old)) && !util.Lexists(newDir) {
+			return util.Errorf("%s：%s/ 仍保存着这台机器的家目录和身份；请先停止旧容器，把它移到 %s/，再启动 %s", name, old, new, name)
+		}
+	}
+	return nil
+}
+
+func imageIDs(image string) (int, int, error) {
+	docker, err := require("docker")
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := runCommand([]string{docker, "image", "inspect", "--format", "{{.Id}}", image}, util.Opts{Capture: true}); err != nil {
+		return 0, 0, util.Errorf("本地没有镜像 %q；请加 --pull 运行", image)
+	}
+	result, err := runCommand([]string{docker, "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", image,
+		"-c", "id -u dev; id -g dev"}, util.Opts{Capture: true})
+	if err != nil {
+		return 0, 0, err
+	}
+	ids := strings.Fields(result.Stdout)
+	if len(ids) == 2 {
+		uid, err1 := strconv.Atoi(ids[0])
+		gid, err2 := strconv.Atoi(ids[1])
+		if err1 == nil && err2 == nil {
+			return uid, gid, nil
+		}
+	}
+	return 0, 0, util.Errorf("无法从镜像中确定 dev 用户的 UID/GID")
+}
+
+const homeScript = `set -eu
+if [ ! -f /persistent-home/.cc-runtime-home-initialized ]; then
+    for path in /home/dev/.[!.]* /home/dev/..?* /home/dev/*; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+        # 镜像里可能带着每台机器的运行状态，从不复制。
+        case "${path##*/}" in workspace|.cache|.claude|.claude.json) continue ;; esac
+        cp -a -n "$path" /persistent-home/
+    done
+    mkdir -p /persistent-home/workspace
+    chown "$1:$2" /persistent-home /persistent-home/workspace
+    touch /persistent-home/.cc-runtime-home-initialized
+fi
+`
+
+// InitializeHome 从镜像初始化 bind mount 的家目录，只做一次，不覆盖使用者的文件。
+func InitializeHome(image, home string, uid, gid int) error {
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		return err
+	}
+	docker, err := require("docker")
+	if err != nil {
+		return err
+	}
+	_, err = runCommand([]string{docker, "run", "--rm", "--network", "none", "--user", "0:0",
+		"--mount", "type=bind,source=" + home + ",target=/persistent-home",
+		"--entrypoint", "/bin/sh", image, "-c", homeScript, "init", strconv.Itoa(uid), strconv.Itoa(gid)}, util.Opts{})
+	return err
+}
+
+// existingContainer 可在测试中替换。
+var existingContainer = func(cfg config.Config, service string) (string, error) {
+	result, err := compose(cfg, true, false, "ps", "--all", "--quiet", service)
+	if err != nil {
+		return "", err
+	}
+	ids := strings.Fields(result.Stdout)
+	if len(ids) > 1 {
+		return "", util.Errorf("%s 容器最多应有一个", service)
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	return ids[0], nil
+}
+
+var machineIDFile = regexp.MustCompile(`^[0-9a-f]{32}\n?$`)
+var machineID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// InitializeMachineID 保留 machine-id：先用文件里的，其次用现有容器里的，最后新建。
+func InitializeMachineID(cfg config.Config, name string, s Service) error {
+	mount := MountFor(s, "/etc/machine-id")
+	if mount == nil {
+		return nil
+	}
+	if mount.Type != "bind" {
+		return util.Errorf("%s 的 machine-id 必须用 bind mount", name)
+	}
+	path := mount.Source
+	if data, err := os.ReadFile(path); err == nil {
+		if !machineIDFile.Match(data) {
+			return util.Errorf("%s 的 machine-id 不是有效的 ID：%s", name, path)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	container, err := existingContainer(cfg, name)
+	if err != nil {
+		return err
+	}
+	value := ""
+	if container != "" {
+		temporary, err := os.MkdirTemp("", "cc-machine-id-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(temporary)
+		copied := filepath.Join(temporary, "machine-id")
+		docker, err := require("docker")
+		if err != nil {
+			return err
+		}
+		if _, err := runCommand([]string{docker, "cp", "-L", container + ":/etc/machine-id", copied}, util.Opts{}); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(copied)
+		if err != nil {
+			return err
+		}
+		if v := strings.TrimSpace(string(data)); machineID.MatchString(v) {
+			value = v
+		}
+	}
+	action := "沿用已有的"
+	if value == "" {
+		action = "生成了新的"
+		value = newMachineID()
+	}
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o644); err != nil {
+		return err
+	}
+	os.Chmod(path, 0o644)
+	fmt.Printf("%s：%s machine-id。\n", name, action)
+	return nil
+}
+
+func newMachineID() string {
+	var b [16]byte
+	f, err := os.Open("/dev/urandom")
+	if err == nil {
+		defer f.Close()
+		f.Read(b[:])
+	}
+	// UUID v4 的位，与 uuid.uuid4().hex 相同的格式。
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x", b)
+}
+
+const sshCopyScript = `set -eu
+umask 077
+for type in rsa ecdsa ed25519; do
+    ssh-keygen -y -f "/source/ssh_host_${type}_key" > /dev/null
+    cp "/source/ssh_host_${type}_key" "/keys/ssh_host_${type}_key"
+    chown root:root "/keys/ssh_host_${type}_key"
+    chmod 600 "/keys/ssh_host_${type}_key"
+done
+`
+
+// InitializeSSHKeys 保留 SSH 主机密钥：校验已保存的，或从容器里迁移。
+func InitializeSSHKeys(cfg config.Config, image, name string, s Service) error {
+	mount := MountFor(s, SSHTarget)
+	if mount.Type != "bind" {
+		return util.Errorf("SSH 主机密钥必须用 bind mount")
+	}
+	directory := util.Resolve(mount.Source)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	docker, err := require("docker")
+	if err != nil {
+		return err
+	}
+	helper := []string{docker, "run", "--rm", "--network", "none", "--user", "0:0",
+		"--mount", "type=bind,source=" + directory + ",target=/keys"}
+	with := func(extra ...string) []string { return append(append([]string(nil), helper...), extra...) }
+	existing, err := runCommand(with("--entrypoint", "/bin/sh", image, "-c",
+		`find /keys -name "ssh_host_*_key" -print`), util.Opts{Capture: true})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(existing.Stdout) != "" {
+		_, err := runCommand(with("--entrypoint", "/bin/sh", image, "-c",
+			`set -eu; for type in rsa ecdsa ed25519; do `+
+				`ssh-keygen -y -f "/keys/ssh_host_${type}_key" > /dev/null; done`), util.Opts{})
+		return err // 从不覆盖已经确立的身份
+	}
+	container, err := existingContainer(cfg, name)
+	if err != nil || container == "" {
+		return err // 新机器：入口脚本会在这个目录里生成密钥
+	}
+	containers, err := Inspect([]string{container})
+	if err != nil {
+		return err
+	}
+	old := "/etc/ssh"
+	for _, c := range containers {
+		for _, m := range c.Mounts {
+			if m.Destination == SSHTarget {
+				old = SSHTarget
+			}
+		}
+	}
+	temporary, err := os.MkdirTemp("", "cc-ssh-migration-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(temporary)
+	source := filepath.Join(temporary, "ssh")
+	if _, err := runCommand([]string{docker, "cp", container + ":" + old, source}, util.Opts{}); err != nil {
+		return err
+	}
+	for _, kind := range []string{"rsa", "ecdsa", "ed25519"} {
+		if info, err := os.Stat(filepath.Join(source, "ssh_host_"+kind+"_key")); err != nil || !info.Mode().IsRegular() {
+			return util.Errorf("%s 的主机密钥不完整；拒绝替换它的身份", name)
+		}
+	}
+	if _, err := runCommand(with("--mount", "type=bind,source="+source+",target=/source,readonly",
+		"--entrypoint", "/bin/sh", image, "-c", sshCopyScript), util.Opts{}); err != nil {
+		return err
+	}
+	fmt.Printf("%s：沿用已有的 SSH 主机密钥。\n", name)
+	return nil
+}
+
+// initializeCache 创建开发机用到的命名卷和它们的子路径。
+func initializeCache(p Project, image string, s Service, uid, gid int) error {
+	docker, err := require("docker")
+	if err != nil {
+		return err
+	}
+	for _, mount := range s.Volumes {
+		if mount.Type != "volume" {
+			continue
+		}
+		name := p.Volumes[mount.Source].Name
+		if name == "" {
+			name = p.Name + "_" + mount.Source
+		}
+		if _, err := runCommand([]string{docker, "volume", "create", name}, util.Opts{Capture: true}); err != nil {
+			return err
+		}
+		if mount.Volume != nil && mount.Volume.Subpath != "" {
+			if _, err := runCommand([]string{docker, "run", "--rm", "--network", "none", "--user", "0:0",
+				"--mount", "type=volume,source=" + name + ",target=/volume",
+				"--entrypoint", "/bin/sh", image, "-c",
+				`mkdir -p "/volume/$3" && chown "$1:$2" "/volume/$3"`, "init",
+				strconv.Itoa(uid), strconv.Itoa(gid), mount.Volume.Subpath}, util.Opts{}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Prepare 准备将要创建的开发机；services 为 nil 表示全部。
+func Prepare(cfg config.Config, p Project, services []string) error {
+	wanted := map[string]bool{}
+	for _, s := range services {
+		wanted[s] = true
+	}
+	var machines []string
+	for _, name := range DevServices(p) {
+		if services == nil || wanted[name] {
+			machines = append(machines, name)
+		}
+	}
+	for _, name := range machines {
+		if err := CheckLegacy(cfg, name, p.Services[name]); err != nil {
+			return err
+		}
+	}
+	for _, name := range machines {
+		s := p.Services[name]
+		uid, gid, err := imageIDs(s.Image)
+		if err != nil {
+			return err
+		}
+		if home := MountFor(s, HomeTarget); home != nil {
+			if home.Type != "bind" {
+				return util.Errorf("%s 的家目录必须是 bind mount", name)
+			}
+			if err := InitializeHome(s.Image, home.Source, uid, gid); err != nil {
+				return err
+			}
+		}
+		if err := InitializeMachineID(cfg, name, s); err != nil {
+			return err
+		}
+		if err := InitializeSSHKeys(cfg, s.Image, name, s); err != nil {
+			return err
+		}
+		if err := initializeCache(p, s.Image, s, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type UpOptions struct {
+	Pull, ForceRecreate, AllowOrphans bool
+}
+
+func Up(cfg config.Config, services []string, opts UpOptions) error {
+	project, err := Model(cfg)
+	if err != nil {
+		return err
+	}
+	var unknown []string
+	for _, s := range services {
+		if _, ok := project.Services[s]; !ok {
+			unknown = append(unknown, s)
+		}
+	}
+	if len(unknown) > 0 {
+		return util.Errorf("未知服务：%s", strings.Join(unknown, ", "))
+	}
+	targets := project.ServiceNames()
+	if len(services) > 0 {
+		targets = WithHelpers(project, services)
+	}
+	orphans, err := runningOrphans(project)
+	if err != nil {
+		return err
+	}
+	if len(orphans) > 0 && !opts.AllowOrphans {
+		var names []string
+		for _, c := range orphans {
+			names = append(names, strings.TrimPrefix(c.Name, "/"))
+		}
+		conflicts := AddressConflicts(project, targets, orphans)
+		if len(conflicts) > 0 || len(services) == 0 {
+			detail := "完整启动会与它们冲突"
+			if len(conflicts) > 0 {
+				detail = strings.Join(conflicts, "；")
+			}
+			return util.Errorf("有运行中的容器不在 compose.yaml 里（%s）：%s。请先停止它们，或只启动指定服务。",
+				strings.Join(names, ", "), detail)
+		}
+	}
+	if opts.Pull {
+		pull := []string{"pull"}
+		for _, s := range targets {
+			if project.Services[s].Image != "" {
+				pull = append(pull, s)
+			}
+		}
+		if _, err := compose(cfg, false, false, pull...); err != nil {
+			return err
+		}
+	}
+	if err := Prepare(cfg, project, targets); err != nil {
+		return err
+	}
+	args := []string{"up", "-d"}
+	if len(services) > 0 {
+		args = append(args, "--no-deps")
+	}
+	if opts.ForceRecreate {
+		args = append(args, "--force-recreate")
+	}
+	_, err = compose(cfg, false, false, append(args, targets...)...)
+	return err
+}
+
+// ComposePassthrough 运行任意 Compose 命令；会创建容器的命令先准备开发机。
+func ComposePassthrough(cfg config.Config, args []string) (int, error) {
+	creates := false
+	for _, a := range args {
+		if creatingSubcommands[a] {
+			creates = true
+		}
+	}
+	if creates {
+		project, err := Model(cfg)
+		if err != nil {
+			return 1, err
+		}
+		var named []string
+		for _, a := range args {
+			if _, ok := project.Services[a]; ok {
+				named = append(named, a)
+			}
+		}
+		if err := Prepare(cfg, project, named); err != nil {
+			return 1, err
+		}
+	}
+	result, err := compose(cfg, false, true, args...)
+	return result.Code, err
+}

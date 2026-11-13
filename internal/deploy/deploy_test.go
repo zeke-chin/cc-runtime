@@ -1,0 +1,218 @@
+package deploy
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/zeke-chin/cc-runtime/internal/config"
+	"github.com/zeke-chin/cc-runtime/internal/testutil"
+	"github.com/zeke-chin/cc-runtime/internal/util"
+)
+
+var dockerTests = os.Getenv("CC_RUNTIME_DOCKER_TEST") == "1"
+
+func testImage() string {
+	if image := os.Getenv("CC_RUNTIME_TEST_IMAGE"); image != "" {
+		return image
+	}
+	return "ghcr.io/zeke-chin/cc-runtime:latest"
+}
+
+func machine(base, name string) Service {
+	address := "172.30.0.11"
+	if name == "dev-PA" {
+		address = "172.30.0.10"
+	}
+	return Service{Image: testImage(), Volumes: []Mount{
+		{Type: "bind", Source: filepath.Join(base, "dev-runtimes", name, "ssh-host-keys"), Target: SSHTarget},
+		{Type: "bind", Source: filepath.Join(base, "dev-runtimes", name, "machine-id"), Target: "/etc/machine-id"},
+		{Type: "bind", Source: filepath.Join(base, "dev-runtimes", name, "home"), Target: HomeTarget},
+	}, Networks: map[string]*Network{"private": {IPv4Address: address}}}
+}
+
+func project(root string) Project {
+	return Project{Name: "cc-runtime", Services: map[string]Service{
+		"dev-PA": machine(root, "dev-PA"), "dev-CA": machine(root, "dev-CA"),
+		"dev-PA-network-init": {Image: "x"}, "proxy": {Image: "x"}}}
+}
+
+func TestDevServicesAndHelpers(t *testing.T) {
+	p := project(t.TempDir())
+	if got := DevServices(p); !slices.Equal(got, []string{"dev-CA", "dev-PA"}) {
+		t.Fatal(got)
+	}
+	if got := WithHelpers(p, []string{"dev-PA", "proxy"}); !slices.Equal(got, []string{"dev-PA", "proxy", "dev-PA-network-init"}) {
+		t.Fatal(got)
+	}
+}
+
+func TestLegacyDirectoryBlocksOnlyTheMachineThatMoved(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "repo")
+	cfg := testutil.MakeConfig(t, base, root)
+	p := project(root)
+	os.Mkdir(filepath.Join(root, "dev-runtime"), 0o755) // 旧布局还在
+	if err := CheckLegacy(cfg, "dev-PA", p.Services["dev-PA"]); err == nil || !strings.Contains(err.Error(), "dev-runtime/ 仍保存着") {
+		t.Fatal(err)
+	}
+	if err := CheckLegacy(cfg, "dev-CA", p.Services["dev-CA"]); err != nil { // 不受影响
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(root, "dev-runtimes/dev-PA"), 0o755)
+	if err := CheckLegacy(cfg, "dev-PA", p.Services["dev-PA"]); err != nil { // 已经移动：可以
+		t.Fatal(err)
+	}
+}
+
+func TestAddressConflictsWithRunningOrphans(t *testing.T) {
+	var orphan Container
+	orphan.Name = "/cc-runtime-dev-1"
+	orphan.NetworkSettings.Networks = map[string]struct {
+		IPAddress string `json:"IPAddress"`
+	}{"cc-runtime_private": {IPAddress: "172.30.0.10"}}
+	got := AddressConflicts(project(t.TempDir()), []string{"dev-PA", "dev-CA"}, []Container{orphan})
+	if !slices.Equal(got, []string{"dev-PA 需要 172.30.0.10，但它仍被 cc-runtime-dev-1 占用"}) {
+		t.Fatal(got)
+	}
+}
+
+func machineIDSetup(t *testing.T, container string, copied string) (config.Config, string, Service) {
+	base := t.TempDir()
+	cfg := testutil.MakeConfig(t, base, "")
+	path := filepath.Join(base, "machine-id")
+	savedRequire, savedExisting, savedRun := require, existingContainer, runCommand
+	t.Cleanup(func() { require, existingContainer, runCommand = savedRequire, savedExisting, savedRun })
+	require = func(string) (string, error) { return "docker", nil }
+	existingContainer = func(config.Config, string) (string, error) { return container, nil }
+	runCommand = func(args []string, _ util.Opts) (util.Result, error) {
+		if copied == "" {
+			t.Fatalf("不应运行 %v", args)
+		}
+		return util.Result{}, os.WriteFile(args[len(args)-1], []byte(copied), 0o644)
+	}
+	return cfg, path, Service{Volumes: []Mount{{Type: "bind", Source: path, Target: "/etc/machine-id"}}}
+}
+
+func TestNewMachineGetsFreshIDAndExistingIDIsKept(t *testing.T) {
+	cfg, path, service := machineIDSetup(t, "", "")
+	if err := InitializeMachineID(cfg, "dev-X", service); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(path)
+	if !regexp.MustCompile(`^[0-9a-f]{32}\n$`).Match(first) {
+		t.Fatal(string(first))
+	}
+	InitializeMachineID(cfg, "dev-X", service)
+	if again, _ := os.ReadFile(path); string(again) != string(first) {
+		t.Fatal("machine-id 变了")
+	}
+}
+
+func TestExistingContainerIDIsKept(t *testing.T) {
+	cfg, path, service := machineIDSetup(t, "abc123", "0123456789abcdef0123456789abcdef\n")
+	if err := InitializeMachineID(cfg, "dev-X", service); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "0123456789abcdef0123456789abcdef\n" {
+		t.Fatal(string(got))
+	}
+}
+
+func TestInvalidExistingFileIsRefused(t *testing.T) {
+	cfg, path, service := machineIDSetup(t, "", "")
+	os.WriteFile(path, nil, 0o644)
+	if err := InitializeMachineID(cfg, "dev-X", service); err == nil || !strings.Contains(err.Error(), "不是有效的") {
+		t.Fatal(err)
+	}
+}
+
+// ---- Docker 集成测试（CC_RUNTIME_DOCKER_TEST=1 时运行） ----
+
+func docker(t *testing.T, args ...string) {
+	t.Helper()
+	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		t.Fatalf("docker %v：%v\n%s", args, err, out)
+	}
+}
+
+func TestSSHKeysAreMigratedFromAStoppedContainerAndThenKept(t *testing.T) {
+	if !dockerTests {
+		t.Skip("Docker 集成测试需要 CC_RUNTIME_DOCKER_TEST=1")
+	}
+	name := fmt.Sprintf("cc-identity-test-%d", os.Getpid())
+	defer exec.Command("docker", "rm", "-f", name).Run()
+	docker(t, "run", "--name", name, "--network", "none", "--user", "0:0", "--entrypoint", "/bin/sh", testImage(),
+		"-c", "rm -f /etc/ssh/ssh_host_*; ssh-keygen -A")
+	base := t.TempDir()
+	cfg := testutil.MakeConfig(t, base, "")
+	directory := filepath.Join(base, "keys")
+	service := Service{Volumes: []Mount{{Type: "bind", Source: directory, Target: SSHTarget}}}
+	saved := existingContainer
+	defer func() { existingContainer = saved }()
+	existingContainer = func(config.Config, string) (string, error) { return name, nil }
+	if err := InitializeSSHKeys(cfg, testImage(), "dev-X", service); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := filepath.Glob(filepath.Join(directory, "ssh_host_*_key"))
+	if len(keys) != 3 {
+		t.Fatal(keys)
+	}
+	original := map[string]string{}
+	for _, k := range keys {
+		data, _ := os.ReadFile(k)
+		original[k] = string(data)
+	}
+	existingContainer = func(config.Config, string) (string, error) { t.Fatal("应复用已保存的密钥"); return "", nil }
+	if err := InitializeSSHKeys(cfg, testImage(), "dev-X", service); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range original {
+		if data, _ := os.ReadFile(k); string(data) != v {
+			t.Fatal("密钥被替换了")
+		}
+	}
+	os.WriteFile(keys[0], []byte("invalid key\n"), 0o600) // 损坏的身份必须报错，而不是换新
+	if err := InitializeSSHKeys(cfg, testImage(), "dev-X", service); err == nil {
+		t.Fatal("损坏的密钥应报错")
+	}
+}
+
+func TestHomeIsSeededOnceWithoutOverwriting(t *testing.T) {
+	if !dockerTests {
+		t.Skip("Docker 集成测试需要 CC_RUNTIME_DOCKER_TEST=1")
+	}
+	image := fmt.Sprintf("cc-home-test-%d", os.Getpid())
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	os.Mkdir(home, 0o755)
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("keep-user-config"), 0o644)
+	os.WriteFile(filepath.Join(root, "Dockerfile"), []byte(`FROM python:3.12-slim
+RUN mkdir -p /home/dev/.local/bin /home/dev/.cache /home/dev/workspace && \
+    echo image-config > /home/dev/.zshrc && echo image-tool > /home/dev/.local/bin/tool && \
+    echo no-copy > /home/dev/.cache/image-cache && echo no-copy > /home/dev/workspace/image-source
+`), 0o644)
+	defer exec.Command("docker", "image", "rm", image).Run()
+	docker(t, "build", "-q", "-t", image, root)
+	read := func(rel string) string {
+		data, _ := os.ReadFile(filepath.Join(home, rel))
+		return strings.TrimSpace(string(data))
+	}
+	if err := InitializeHome(image, home, 1234, 1234); err != nil {
+		t.Fatal(err)
+	}
+	if read(".zshrc") != "keep-user-config" || read(".local/bin/tool") != "image-tool" ||
+		util.Lexists(filepath.Join(home, ".cache/image-cache")) || util.Lexists(filepath.Join(home, "workspace/image-source")) {
+		t.Fatal("家目录初始化结果不对")
+	}
+	os.WriteFile(filepath.Join(home, ".local/bin/tool"), []byte("user-updated-tool"), 0o755)
+	InitializeHome(image, home, 1234, 1234)
+	if read(".local/bin/tool") != "user-updated-tool" {
+		t.Fatal("第二次初始化覆盖了使用者的文件")
+	}
+}

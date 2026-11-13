@@ -1,4 +1,0 @@
-#!/bin/sh
-# Run the cc-runtime CLI from anywhere: bin/cc-runtime status
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec uv run --project "$root" --quiet cc-runtime "$@"

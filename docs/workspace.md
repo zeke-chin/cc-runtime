@@ -82,7 +82,7 @@ cc-runtime 选第三种。Linux 那棵树放在 Mac 的磁盘上（`RUNTIME_DIR/
 
 | 来源 | 内容 |
 | --- | --- |
-| 内置（`src/cc_runtime/config.py`） | 平台相关的依赖和构建产物：`node_modules`、`.venv`、`target`、`.next`、`.gradle` 等；各自生成的缓存：`__pycache__`、`.pytest_cache` 等。任意深度按名字匹配 |
+| 项目（`sync-ignores`，入库） | 平台相关的依赖和构建产物：`node_modules`、`.venv`、`target`、`.next`、`.gradle` 等；各自生成的缓存：`__pycache__`、`.pytest_cache` 等。一般按名字在任意深度匹配，也可以写锚定路径。文件缺失时 `sync create` 和 `check ignores` 会报错 |
 | 本部署 | 本仓库的 `dev-runtimes/`、`tailscale/state/`：各机器的家目录、密钥和登录状态 |
 | 本机（`sync-ignores.local`，不入库） | 只属于这台 Mac 的条目：工作区里的大缓存、其他容器的数据库目录、名字不标准的虚拟环境等 |
 
@@ -109,7 +109,7 @@ APFS 的本地快照（Time Machine 每小时建一个）会继续引用被替�
 
 ### 定时任务
 
-任务登记在 `src/cc_runtime/jobs.py`，由 launchd 调用 `cc-runtime job run <任务>`。每次运行都会记录结果，在 `cc-runtime status` 里显示：
+任务登记在 `internal/jobs/jobs.go`。launchd 直接调用安装好的二进制 `~/.local/bin/cc-runtime job run <任务>`，并通过 `CC_RUNTIME_ROOT` 传入仓库位置，所以任务不受仓库当前检出的分支或开发环境影响；重新运行 `scripts/install.sh` 后，下一次运行就会用上新版本。每次运行都会记录结果，在 `cc-runtime status` 里显示：
 
 | 任务 | 时间 | 作用 |
 | --- | --- | --- |

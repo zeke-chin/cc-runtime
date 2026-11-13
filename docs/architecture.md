@@ -79,7 +79,7 @@ flowchart LR
 - **`machine-id` 和 SSH 主机密钥**：已有就校验后沿用；没有时从同名服务的现有容器（包括已停止的）迁移；都没有才是一台新机器，生成新的。已有的密钥损坏时报错，不会悄悄换一套身份。
 - **缓存**：每台开发机的 `~/.cache` 是一个外部 Docker 卷（`CACHE_VOLUME`）里的子目录，`compose down -v` 不会删除它。
 
-新开发机的家目录可以用 `cc-runtime seed-home <现有家目录> <新家目录>` 初始化：复制工具链、包缓存和 shell 配置（macOS 上为写时复制克隆，不占额外空间），以及使用者选择共享的账号凭据（`src/cc_runtime/seed.py` 中的 `CREDENTIALS`），不复制任何机器身份。
+新开发机的家目录可以用 `cc-runtime seed-home <现有家目录> <新家目录>` 初始化：复制工具链、包缓存和 shell 配置（macOS 上为写时复制克隆，不占额外空间），以及使用者选择共享的账号凭据（`internal/seed/seed.go` 中的 `Credentials`），不复制任何机器身份。
 
 ## 镜像
 

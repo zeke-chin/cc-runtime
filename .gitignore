@@ -12,6 +12,5 @@ tailscale/state/
 # Private notes and working records
 docs/local/
 
-# Python
-.venv/
-__pycache__/
+# 本地编译产物（安装用 scripts/install.sh，装到 ~/.local/bin）
+/cc-runtime
