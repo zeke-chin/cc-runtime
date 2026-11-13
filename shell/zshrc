@@ -95,3 +95,10 @@ alias zshcc="exec zsh"
 alias nload="bash -c 'nload -u H'"
 alias j="zi"
 alias gcm="git commit -m "
+
+# Claude Code 的 Bash 工具（CLAUDECODE=1）按 bash 的习惯执行命令：未加引号的变量
+# 按空格拆分、未匹配的通配符原样保留、重定向可以覆盖已有文件。交互终端不受影响。
+if [[ -n $CLAUDECODE ]]; then
+  setopt sh_word_split clobber
+  unsetopt nomatch
+fi
