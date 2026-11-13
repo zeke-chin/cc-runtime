@@ -78,9 +78,11 @@ def create_command(alpha=WORKSPACE, beta=LINUX_WORKSPACE, name=SESSION, binary="
 
 
 def session_state(name=SESSION):
-    """Return (exists, connected_and_watching, conflicts, problems, raw)."""
+    """Return (exists, healthy, conflicts, problems, raw)."""
+    # Do not let the query start a stopped daemon: a stopped daemon must be visible.
+    env = dict(os.environ, MUTAGEN_DISABLE_AUTOSTART="1")
     result = subprocess.run([mutagen(), "sync", "list", "--long", name],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, env=env)
     raw = result.stdout + result.stderr
     if result.returncode != 0:
         return False, False, 0, 0, raw
@@ -176,7 +178,10 @@ def main():
         return 0
     exists, healthy, conflicts, problems, raw = session_state()
     if not exists:
-        print(f"Session {SESSION!r} does not exist (or the Mutagen daemon is not running).")
+        if "daemon" in raw.lower():
+            print("NOT RUNNING: the Mutagen daemon is not running. Start it with 'mutagen daemon start'.")
+        else:
+            print(f"Session {SESSION!r} does not exist. Create it with 'workspace-sync.py create'.")
         return 1
     print(raw.strip())
     if not healthy:
