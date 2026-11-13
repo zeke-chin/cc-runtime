@@ -1,6 +1,6 @@
 # 依赖隔离落地计划
 
-状态：执行中（2026-11-12）。阶段 0、1 已完成，阶段 1 有两项待使用者确认。阶段 2 因 `dev-california` 里有会话而暂停在重建之前。阶段 3 中不依赖重建的第 1 到 5 步已完成，同步会话 `linux-workspace` 已在运行，4 个试点仓库已迁出。阶段 4 交给使用者，见交接步骤。设计见 [依赖隔离：两个方案](dependency-isolation.md)，本计划落地其中的方案 2。
+状态：执行中（2026-11-13）。阶段 0、1、2 已完成。阶段 3 的步骤全部完成，验收中只剩需要使用者本人参与的三项：重启 Mac、3 天观察期、`claude` 登录后的识别检查；依赖耗时是否接受也待确认。阶段 4 交给使用者，见交接步骤。设计见 [依赖隔离：两个方案](dependency-isolation.md)，本计划落地其中的方案 2。
 
 ## 总体安排
 
@@ -25,15 +25,16 @@
 
 | 项目 | 状态 |
 | --- | --- |
-| 容器 | `dev`、`dev-california`、两个 proxy、tailscale 都在运行。`dev-california` 里有一个 `herdr server` 和它的 `zsh`（容器启动后不久建立，此后没有活动），所以没有重建 |
+| 容器 | `dev`（旧方案）、`dev-CA`（同步的 workspace，容器名 `cc-runtime-dev-CA-1`）、两个 proxy、tailscale 都在运行 |
 | Docker / Compose | 29.4.0 / 5.1.2。已验证 Compose 接受 `dev-CA` 这样含大写字母的服务名 |
 | Mutagen | Mac 上已安装 0.18.1，守护进程在运行。只有一个临时会话 `spike` |
 | Mac 编辑器 | Cursor、Zed、Xcode。Cursor 的后台 `git status` 只读（`GIT_OPTIONAL_LOCKS=0`） |
 | `/Users/zeke/.cc-runtime` | `linux-workspace/`（69 GB，会话 `linux-workspace` 在运行）和 `git/`（4 个试点仓库的 git 数据）。阶段 1 的临时内容已全部删除 |
-| 分支 | `stage2-dev-CA`（阶段 2 的改动）、`stage3-dev-CA`（在前者之上，阶段 3 的配置改动），都没有合入 `main`；它们的临时 worktree 已删除 |
+| 分支 | `stage2-dev-CA`、`stage3-dev-CA` 已合入 `main`，可以删除 |
+| Mutagen 守护进程 | 已注册为 launchd 代理 `io.mutagen.mutagen` |
 | 仓库 | 文档已更新为两个方案并提交，工作区干净 |
 | 执行位置 | Docker、Homebrew、同步工具的命令都在 Mac 上执行，从 `dev` 容器经 `ssh -p 10023 zeke@172.30.0.2` 发起，Mac 上需要先 `export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH`。执行落地的会话运行在 `dev` 里，所以阶段 4 的重建不能从这里发起 |
-| 容器与镜像 | 容器名 `cc-runtime-dev-1`、`cc-runtime-dev-california-1`；开发镜像 `ghcr.io/zeke-chin/cc-runtime:latest`，用户 `dev` 的 uid/gid 为 1001 |
+| 容器与镜像 | 容器名 `cc-runtime-dev-1`、`cc-runtime-dev-CA-1`；开发镜像 `ghcr.io/zeke-chin/cc-runtime:latest`，用户 `dev` 的 uid/gid 为 1001 |
 | 一次性测试容器 | 不经过 Compose，直接 `docker run -d --rm --network none --entrypoint sleep -u 1001:1001 -v ... <镜像> infinity`，测完 `docker rm -f` |
 | 实测中踩过的坑 | Mac 的 `/tmp` 是指向 `/private/tmp` 的链接，挂载时用 `pwd -P` 得到的真实路径；开发镜像里没有 `bc`，计时用 `date +%s%N`；virtiofs 有缓存，Mac 删除文件后容器里最长约 1 秒仍能看到它，紧接着创建同名文件可能失败；直接给 `ssh` 传命令时远端是 zsh，未加引号的变量不按空格拆分，多行脚本用 `ssh ... 'bash -s' <<'EOF'`；一次性容器里的 git 要加 `-c safe.directory=*` |
 
@@ -149,30 +150,23 @@
 
 回退：删除新容器，把目录移回原名，用 Git 恢复第 4 步的文件，按原服务名启动。
 
-### 执行情况（2026-11-12）
+### 执行情况（2026-11-13）：通过
 
-**未执行重建，阶段 2 暂停在第 1 步之后。** 重建前检查 `dev-california`，里面有一个 `herdr server` 和它下面的一个 `zsh`（pts/0）。容器启动 12 分钟后建立，此后近 7 小时没有输入输出，也没有运行任何程序。按使用者的要求，有会话就不重建。
-
-已经完成、不依赖重建的部分：
-
-- 第 1 步的基线已记录：
+- 11-12 检查时，`dev-california` 里有一个 herdr 会话（没有活动），所以暂停在重建之前，先记录了基线。11-13 使用者同意关掉它之后，按步骤执行：删除旧容器，把目录移到 `dev-runtimes/dev-CA`，合入分支 `stage2-dev-CA`，然后用 `scripts/dev.py compose up -d --no-deps dev-CA dev-CA-network-init` 启动。
+- 基线（11-12 记录）：
   - SSH 主机密钥指纹：RSA `SHA256:bvJndCc26+12UCmFp36USAneRnyAeSnB+X1hg5IVqWc`，ECDSA `SHA256:NrNZ2DZCrNqPjpBRLL44xQJibc3WtE+2H/FokBBDtO0`，ED25519 `SHA256:+9yrPc1a1OLd+108GcudzPzhEkz/YhOs6EhEWk9dgLA`。
   - `machine-id`：`db417b5d9e4c42f1a318d52ebca56a68`。
   - 出口 IP：`170.106.196.73`。
-  - 登录状态：`gh` 已登录，有 `.git-credentials`；没有 `~/.claude/.credentials.json`，`claude` 可能尚未登录，验收时按「与基线相同」判断。
-  - `~/.cache`：2 项，5.7 MB。
-  - 端口 2223、5902、6081 可连；Mac 的 `known_hosts` 里已有 `[127.0.0.1]:2223`。
+  - `gh` 已登录，有 `.git-credentials`；没有 `~/.claude/.credentials.json`（`claude` 没有登录过）。
+  - `~/.cache` 5.7 MB。
   - `dev` 的创建时间：`2026-11-04T07:33:12Z`。
-- 第 4 步的改动已提交在分支 `stage2-dev-CA`，没有合入 `main`，所以 `main` 仍和实际部署一致。单元测试通过，`docker compose config --quiet` 通过。改动包括：`compose.yaml`、`scripts/dev.py`（`CACHE_NAMES` 把 `dev-CA` 映射回 `cache-dev-california`，有测试覆盖）、`.gitignore`、`.dockerignore`、`AGENTS.md`、`README.md`、`proxy/README.md`、`scripts/seed-dev-home.py`。
-
-**恢复执行**（在 Mac 上；会话还在时，先请使用者关掉它）：
-
-1. 再查一次会话：`docker exec cc-runtime-dev-california-1 ps -eo pid,etime,tty,args`，确认没有 `herdr`、shell 或 `claude`。
-2. 停止并删除旧容器：`docker compose stop dev-california-network-init dev-california && docker compose rm -f dev-california-network-init dev-california`。
-3. 移动目录：`mkdir -p dev-runtimes && mv dev-california-runtime dev-runtimes/dev-CA`。
-4. 合入分支：`git merge stage2-dev-CA`（分支只改 `dev-california` 相关的内容，不影响运行中的 `dev`）。
-5. 启动：`python3 scripts/dev.py compose up -d --no-deps dev-CA dev-CA-network-init`。
-6. 按上面的验收逐项对照基线。
+- 验收，全部和基线一致：
+  - 三种主机密钥指纹和 `machine-id` 都相同；主机名仍是 `dev-california`；从 Mac 经 2223 端口登录没有主机密钥变更警告。
+  - 出口 IP 仍是 `170.106.196.73`；VNC 5902 握手正常（`RFB 003.008`），noVNC 6081 返回 200。
+  - `gh` 和 `.git-credentials` 仍可用，`claude` 和基线一样没有登录。
+  - `~/.cache` 原有内容还在（6.0 MB）。
+  - `dev` 没有被重建，创建时间不变。
+  - 单元测试通过。
 
 ## 阶段 3：`dev-CA` 切换到同步的 workspace
 
@@ -219,9 +213,9 @@
 
 回退：先让会话把未同步的改动推完，用 `scripts/git-store.py restore` 恢复试点仓库，再把 `dev-CA` 的 workspace 挂载源改回 `/Users/zeke/workspace`、去掉 git 目录挂载、把它加回依赖扫描、重建容器，最后暂停会话。阶段 2 的目录和名字不用退。
 
-### 执行情况（2026-11-12）
+### 执行情况（2026-11-12 至 11-13）
 
-第 1 到 5 步不依赖重建，已完成；第 6、7 步和验收要等阶段 2 完成。
+第 1 到 7 步已完成；验收中除了需要使用者本人参与的三项，其余全部通过。
 
 1. **目录。** 已建 `~/.cc-runtime/linux-workspace` 和 `~/.cc-runtime/git`。前者已用 `tmutil addexclusion` 从 Time Machine 中排除，后者没有排除。**Spotlight 的排除待使用者在「系统设置 → Spotlight → 搜索隐私」里添加 `linux-workspace`。** 没有用 `.metadata_never_index`：放在 beta 根下，它会被同步到 Mac workspace 的根目录，反而关掉 workspace 的索引。
 2. **脚本。**
@@ -248,14 +242,32 @@
    - 体积说明：其中 `github_work/shopify-lens/data/oss-history` 一个目录就有 32 GB，是未被 git 跟踪的数据。是否加忽略条目，**待使用者确认**。
 5. **迁出试点仓库。** `git-store.py externalize` 迁出了 4 个仓库，两棵树里的链接相同，Mac 侧 `status` 干净，`git-store.py status` 没有异常，会话没有冲突。在一个模拟 `dev-CA` 挂载的一次性容器里（Linux 树加同路径的 git 目录，只读、不联网），4 个仓库的顶层目录、分支、HEAD 都和 Mac 一致，工作区干净，第一次 `status` 用时 19 到 355 ms。
 
-**恢复执行**（阶段 2 完成之后，在 Mac 上）：
+6. **配置。** 合入分支 `stage3-dev-CA`：`compose.yaml` 改了 `dev-CA` 的 workspace 挂载源，加了 git 目录挂载和静态缓存卷；`scripts/dev.py` 里 `SCAN_SERVICES = ("dev",)`；`dependency-rules.json` 加了排除路径。
+7. **重建。** 执行 `python3 scripts/dev.py compose up -d --no-deps --force-recreate dev-CA dev-CA-network-init`。检查挂载：workspace 指向 `linux-workspace`，git 目录挂在同一路径，`~/.cache` 是卷子路径 `linux-aarch64/b7bcf81f26a3f3a5/cache-dev-california`。
 
-1. 合入分支：`git merge stage3-dev-CA`。它包含 `compose.yaml`（`dev-CA` 的 workspace 挂载源、git 目录挂载、静态缓存卷）、`scripts/dev.py`（`SCAN_SERVICES = ("dev",)`）、`dependency-rules.json` 和测试。单元测试和 `docker compose config --quiet` 已通过。
-2. 第 7 步：`python3 scripts/dev.py compose up -d --no-deps --force-recreate dev-CA dev-CA-network-init`。
-3. 按验收表逐项检查。
-   - 「推送」用 `git push --dry-run`，或者推一个临时分支后立刻删除，避免在使用者的远端留下测试提交。
-   - 3 天观察期内每天运行一次 `python3 scripts/workspace-sync.py compare` 和 `python3 scripts/git-store.py status`。
-   - 重启 Mac 一项由使用者操作。
+另外，Mutagen 守护进程原来没有注册为登录后自动启动，重启 Mac 后同步不会恢复。已执行 `mutagen daemon register`，现在由 launchd 的 `io.mutagen.mutagen` 管理。
+
+**验收结果：**
+
+| 类别 | 检查 | 结果 |
+| --- | --- | --- |
+| 身份 | 重复阶段 2 的验收 | 通过，全部和基线一致 |
+| 同步 | 两侧各改一个文件 | 通过。Mac → `dev-CA` 0.42 到 0.44 秒（含 `docker exec` 轮询开销），`dev-CA` → Mac 0.30 到 0.36 秒 |
+| 同步 | 大分支切换 | 通过。试点仓库的分支差异都不大，改用 `fetch_tencent_docs` 切到相差 1823 个文件的历史提交再切回。切换命令 0.17 到 0.37 秒，另一侧最晚 1.17 秒后干净；两个方向各一次，结束后两侧都在 `main` 上且干净 |
+| 同步 | 会话状态 | 通过，没有冲突和问题 |
+| 隔离 | 装依赖互不影响 | 通过。`dev-CA` 里装完三个项目的依赖，Mac 侧依赖目录的文件数、大小和最新修改时间都没变，Mac 上的 `.venv`（Darwin）和 CometixCode 二进制照常运行。反方向：Mac 上 `uv sync`，`dev-CA` 的 `.venv` 不变，仍是 Linux 的、能运行 |
+| 依赖 | 从零安装并构建 | 通过。和同一容器 `/tmp` 下的副本对比（`/tmp` 是容器自身的文件系统，速度和卷同级），缓存已热时：telegram-dl（Node）安装 3.1 s 对 1.0 s、构建 7.3 s 对 6.4 s；fetch_tencent_docs（Python）都在 0.5 s 以内；jas（Rust）构建 22.5 s 对 21.3 s。冷装 telegram-dl 用了 34 秒，主要是经加州出口下载。CometixCode 在三个地方都构建失败：它依赖的 `rust_icu_sys` 需要系统的 ICU 开发库，开发镜像里没有，和同步无关（属于镜像内容，不在本次范围），所以 Rust 改用 `jas` 测（只在 `dev-CA` 里构建，不涉及它的 git）。**耗时能否接受，待使用者确认** |
+| 依赖 | `rm -rf node_modules`、`cargo clean` | 通过 |
+| git | 提交、推送 | 通过。在临时分支上 `dev-CA` 和 Mac 各提交一次，对方 1 秒内可见，状态干净；`git push --dry-run` 认证成功；临时分支和文件都已删除。**`claude` 能否识别仓库和分支，待使用者在 `dev-CA` 里登录 Claude Code 后确认** |
+| git | `dev-CA` 里 clone 后在 Mac 上迁出 | 通过。clone 后 Mac 侧有源码、不是仓库；立刻迁出被两分钟保护期挡下，过了保护期后迁出，Mac 侧马上可用 git。验证完已删除项目和 git 数据 |
+| git | `git-store.py status` | 通过，没有异常 |
+| 并存 | `dev` 里改未迁出仓库的文件 | 通过。`dev` 写入本仓库的文件同步到了 `dev-CA`，`dev` 里本仓库 git 正常 |
+| 运行期 | 重建 `dev-CA` | 通过。同步不中断，Linux 侧的 `target`、`.venv` 还在，git 可用，身份不变 |
+| 运行期 | 停掉守护进程再启动 | 通过。`status` 原来会被 Mutagen 自动拉起守护进程，因而报不出停止；已改为不自动启动。停止后报「NOT RUNNING」、退出码 1；期间的改动在启动后 4 秒内追平 |
+| 运行期 | 重启 Mac | **待使用者操作**。守护进程已注册到 launchd，重启后检查 `python3 scripts/workspace-sync.py status` |
+| 观察期 | 3 天真实工作 | **待使用者进行**。每天运行一次 `python3 scripts/workspace-sync.py compare` 和 `python3 scripts/git-store.py status` |
+
+阶段 3 在上面三项待确认之前，不算全部落地。阶段 4 的前提是它们都通过。
 
 ## 阶段 4：`dev` 改为 `dev-PA`，迁出全部仓库，清理旧方案
 

@@ -274,7 +274,7 @@ python3 scripts/dev.py compose down
 
 ## 第二台开发机 dev-CA
 
-`dev-CA`（原服务名 `dev-california`，主机名保持 `dev-california`）与 `dev` 使用同一镜像、同一工作区和 Downloads 挂载，以及同一套工作区依赖卷（`node_modules`、`.venv`、`target` 等）。它通过 `proxy-california`（`172.30.0.4`）出网，最终出口为加州节点，时区为 `America/Los_Angeles`。
+`dev-CA`（原服务名 `dev-california`，主机名保持 `dev-california`）与 `dev` 使用同一镜像和 Downloads 挂载。它已切换到依赖隔离的方案 2（见 [依赖隔离](docs/architecture/dependency-isolation.md)）：`/home/dev/workspace` 挂载的是 Mutagen 同步的 Linux 副本 `~/.cc-runtime/linux-workspace`，依赖直接装在项目目录里，只属于 Linux 侧；git 数据在 `~/.cc-runtime/git`，只有已迁出的仓库在 `dev-CA` 里能用 git。`dev` 在迁移完成前仍是旧方案。它通过 `proxy-california`（`172.30.0.4`）出网，最终出口为加州节点，时区为 `America/Los_Angeles`。
 
 | 项目 | `dev` | `dev-CA` |
 |---|---|---|
@@ -285,7 +285,8 @@ python3 scripts/dev.py compose down
 | 家目录 | `dev-runtime/home/` | `dev-runtimes/dev-CA/home/` |
 | SSH 主机密钥 | `dev-runtime/ssh-host-keys/` | `dev-runtimes/dev-CA/ssh-host-keys/` |
 | machine-id | `dev-runtime/machine-id`（从原容器迁移，保持不变） | `dev-runtimes/dev-CA/machine-id`（首次 prepare 生成） |
-| `~/.cache` | 依赖卷 `cache` 子目录 | 依赖卷 `cache-dev-california` 子目录（沿用改名前的目录） |
+| workspace | `/Users/zeke/workspace`，依赖目录由依赖卷逐个屏蔽 | `~/.cc-runtime/linux-workspace`（同步副本），加上同路径挂载的 `~/.cc-runtime/git` |
+| `~/.cache` | 依赖卷 `cache` 子目录 | 依赖卷 `cache-dev-california` 子目录（沿用改名前的目录，在 `compose.yaml` 里静态声明） |
 
 两台机器的机器身份互相独立：主机名、machine-id、SSH 主机密钥、遥测 ID 不共享；`~/.claude` 整个目录和 `~/.claude.json` 也不拷贝，Claude Code 在新机器上单独登录。新家目录用 `scripts/seed-dev-home.py` 从 `dev` 家目录克隆工具链、软件、包缓存和 shell 配置（macOS 上为 APFS 写时复制克隆，不占额外空间、两边互不影响，不使用硬链接）。
 
@@ -294,8 +295,11 @@ python3 scripts/dev.py compose down
 首次启动（不重建 `dev`）：
 
 ```bash
-# up 会先自动扫描并初始化依赖挂载、machine-id、SSH 密钥目录和缓存子目录
+# up 会先初始化 machine-id、SSH 密钥目录等（依赖扫描只服务 dev）
 python3 scripts/dev.py compose up -d --no-deps dev-CA dev-CA-network-init
+# 同步会话和 git 数据在 Mac 上查看
+python3 scripts/workspace-sync.py status
+python3 scripts/git-store.py status
 ```
 
 启动后在 `dev-CA` 中登录 Claude Code；其他已共享凭据的工具无需重新登录。到 Mac 的 SSH 地址为 `ssh -p 10023 zeke@172.30.0.4`。Tailscale 目前只转发到 `dev`。
