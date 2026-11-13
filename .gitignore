@@ -6,7 +6,11 @@ sync-ignores.local
 
 # Per-machine runtime state: homes, SSH host keys, machine-ids, Tailscale login
 dev-runtimes/
+dev-runtime/
 tailscale/state/
+
+# 本机私有笔记和运维记录，不入库
+docs/local/
 
 # 本地编译产物（安装用 scripts/install.sh，装到 ~/.local/bin）
 /cc-runtime
